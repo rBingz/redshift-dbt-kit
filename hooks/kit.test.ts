@@ -12,7 +12,7 @@ const START = { cwd: '.', surface: 'terminal' as const, isInteractive: true }
 // A teammate's machine: shop and billing profiles (billing.dev writes to the prod database, and
 // shop.dev logs in as prod's user), started in the shop project. `dbtWorks: false` has no dbt on PATH.
 function engine(on: On, opts: { dbtWorks?: boolean } = {}) {
-  const seen = { toasts: [] as string[], opened: [] as string[], filled: [] as string[] }
+  const seen = { toasts: [] as string[], opened: [] as string[], filled: [] as string[], closed: [] as string[] }
   mock.env(on, { USERPROFILE: 'C:/home' })
   mock.clock(on)
   mock.store(on)
@@ -29,6 +29,10 @@ function engine(on: On, opts: { dbtWorks?: boolean } = {}) {
   on('ui.open', ($, e) => {
     seen.opened.push(e.id)
     return { value: { isPlaced: true } }
+  })
+  on('ui.close', ($, e) => {
+    seen.closed.push(e.id)
+    return { value: undefined }
   })
   on('ui.toast', ($, e) => {
     seen.toasts.push(e.text)
@@ -116,6 +120,14 @@ describe('/kit', () => {
     await ui.press({ key: 'back' })
     expect(await ui.find({ type: 'Text', text: /✻ Status line/ })).toBeDefined()
     expect(await ui.find({ type: 'Button', key: 'try' })).toBeUndefined() // nothing to try there
+  })
+
+  test('the close button closes the pane', async ($, on) => {
+    const seen = engine(on)
+    await $.command.run(RUN_KIT)
+    const ui = await $.ui.mount({ surface: 'terminal', ...pane })
+    await ui.press({ key: 'close' })
+    expect(seen.closed).toEqual(['kit'])
   })
 
   test('every page draws its preview, on every surface', async ($, on) => {

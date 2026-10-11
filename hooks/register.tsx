@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, RenderInputOf, RenderSurface } from 'claude-code'
 
 import type { Board, Catalog, Check, Env, ModelCard, QueryResult, Running, Setup } from '../types'
 import { CATALOG_SQL, ago, modelCard, modelPath, parseDbtShow, searchCatalog } from './catalog'
@@ -291,6 +291,19 @@ async function checkSetup($: EngineInterface, prodTarget: string, prodDatabases:
   if (dev !== undefined) await update($, setup, s => ({ ...s, dev: { profile: dev.profile, target: dev.target } }))
 }
 
+// Adds a close button under a pane: Claude Code's own ✕ does nothing while only one pane is open.
+function withClose($: EngineInterface, e: RenderInputOf<'Pane', RenderSurface>, id: string, tree: RenderElement): RenderElement {
+  const { Box, Button } = $.ui.resolve(e)
+  return (
+    <Box flexDirection="column">
+      {tree}
+      <Box paddingX={1}>
+        <Button key="close" role="dismiss" label="close" onPress={() => $.ui.close({ id })} />
+      </Box>
+    </Box>
+  )
+}
+
 // `dbt show --output json` rows in the results pane's shape; a column is numeric when its first value is.
 function showResult(rows: Record<string, unknown>[], id: string, isOrdered: boolean): QueryResult | undefined {
   const first = rows[0]
@@ -517,7 +530,7 @@ export const register: Register = (on, options) => {
   // The tour: page 1 is the setup check, then one page per feature, each with a preview drawn from
   // sample data and a "try it" prompt.
   const CHIP = { ok: { label: ' OK ', color: 'success' }, warn: { label: ' WARN ', color: 'warning' }, fail: { label: ' FAIL ', color: 'error' } } as const
-  on('ui.render', { component: 'Pane', requestId: KIT }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: KIT }, async ($, e) => withClose($, e, KIT, await (async () => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const Raster = e.surface === 'terminal' ? $.ui.resolve(e).Raster : undefined
     const s = await read($, setup)
@@ -713,7 +726,7 @@ export const register: Register = (on, options) => {
         <Text dimColor>{` n next · b back${p?.tryIt ? ' · t try it' : ''}${at === 0 ? ' · r recheck' : ''}`}</Text>
       </Box>
     )
-  })
+  })()))
 
   on('command.run', { command: 'dbt-board' }, async $ => {
     await $.ui.open({ id: BOARD, title: '✻ dbt run' })
@@ -725,7 +738,7 @@ export const register: Register = (on, options) => {
     return { text: 'Query results pane opened.' }
   })
 
-  on('ui.render', { component: 'Pane', requestId: BOARD }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: BOARD }, async ($, e) => withClose($, e, BOARD, await (async () => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const run: Board | null = await read($, board)
     const live: Running | null = await read($, running)
@@ -785,9 +798,9 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-  })
+  })()))
 
-  on('ui.render', { component: 'Pane', requestId: RESULTS }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: RESULTS }, async ($, e) => withClose($, e, RESULTS, await (async () => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const Raster = e.surface === 'terminal' ? $.ui.resolve(e).Raster : undefined
     const result: QueryResult | null = await read($, results)
@@ -844,7 +857,7 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-  })
+  })()))
 
   on('command.run', { command: 'rs-schema' }, async $ => {
     await $.ui.open({ id: SCHEMA, title: '✻ Schema', focus: true })
@@ -892,7 +905,7 @@ export const register: Register = (on, options) => {
     return { text: 'dbt model pane opened.' }
   })
 
-  on('ui.render', { component: 'Pane', requestId: SCHEMA }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: SCHEMA }, async ($, e) => withClose($, e, SCHEMA, await (async () => {
     if (e.surface === 'mobile') {
       const { Text } = $.ui.resolve(e)
       return <Text dimColor>✻ Column search needs a keyboard.</Text>
@@ -967,9 +980,9 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-  })
+  })()))
 
-  on('ui.render', { component: 'Pane', requestId: MODEL }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: MODEL }, async ($, e) => withClose($, e, MODEL, await (async () => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const c: ModelCard | null = await read($, card)
     if (c === null) return <Text dimColor>✻ No dbt model yet. Models Claude reads or edits show here.</Text>
@@ -1014,7 +1027,7 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
-  })
+  })()))
 
   // After a Read, Edit or Write of a dbt model, refresh its card. Matched per tool so these
   // pass-through hooks never wrap Bash, where a pass-through .catch would undo the guard's deny.
