@@ -151,7 +151,6 @@ describe('panes', () => {
     let ui = await $.ui.mount({ surface: 'terminal', ...pane('rs-results', '✻ Query results') })
     expect(await ui.find({ type: 'Text', text: /^2026-10-01/ })).toBeDefined()
     expect(await ui.find({ type: 'Raster' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /No charts: the query has no ORDER BY/ })).toBeDefined()
     await ui.unmount()
     await $.tool.call({ tool: 'Bash', command: RESULT_CMD }) // its SQL is not in the command
     ui = await $.ui.mount({ surface: 'terminal', ...pane('rs-results', '✻ Query results') })

@@ -795,11 +795,9 @@ export const register: Register = (on, options) => {
 
     const width = e.props.bodyColumns - 2
     // Charts follow row order, which means nothing unless the query sorted its rows.
-    const numeric = numericColumns(result)
-    const charts = result.isOrdered ? numeric.slice(0, 3) : []
-    const isUnsorted = !result.isOrdered && numeric.length > 0
+    const charts = result.isOrdered ? numericColumns(result).slice(0, 3) : []
     const chartRows = Raster ? 2 : 1
-    const size = Math.max(1, (e.viewport?.rows ?? 24) - 9 - charts.length * chartRows - (isUnsorted ? 1 : 0))
+    const size = Math.max(1, (e.viewport?.rows ?? 24) - 9 - charts.length * chartRows)
     const pages = Math.max(1, Math.ceil(result.rows.length / size))
     const at = Math.min(await read($, page), pages - 1)
     const table = textTable(result, result.rows.slice(at * size, (at + 1) * size), width)
@@ -823,7 +821,6 @@ export const register: Register = (on, options) => {
           ))}
         </Box>
         <Box paddingX={1} flexDirection="column">
-          {isUnsorted && <Text dimColor wrap="truncate-end">No charts: the query has no ORDER BY, so row order means nothing.</Text>}
           {charts.map(i =>
             Raster ? (
               <Box>
