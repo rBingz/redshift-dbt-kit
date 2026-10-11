@@ -81,3 +81,7 @@ When a guarded dbt write runs on a dev target that logs in as the same user as a
 claude plugin validate .
 claude plugin test .
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
