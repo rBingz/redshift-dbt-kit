@@ -2,7 +2,7 @@
 
 A Claude Code mod for teams on Redshift + dbt.
 
-- **Guard**: checks every command Claude runs in Bash or PowerShell. It knows prod by the **database** a dbt target points at, or by a target named `prod`.
+- **Guard**: checks every command Claude runs in Bash or PowerShell. Prod is a target named `prod` **and the database it points at**: any other target that points at that database is prod too, with nothing to set. `prodDatabases` adds more.
   - dbt itself resolves the target, so any `profiles.yml` dbt accepts works: Jinja, `env_var()`, YAML anchors and merges, and every place dbt looks for the file. If dbt cannot resolve the target, writes are blocked with dbt's error.
   - It reads the whole command: chained calls (`&&`, `;`, `|`, new lines), flags before the dbt command, `cd` and `Set-Location`, and `DBT_TARGET`, `DBT_PROFILE`, `DBT_PROFILES_DIR`, `DBT_PROJECT_DIR` and `DBT_FULL_REFRESH`, whether set inline, with `export`, or with `$env:`.
   - On prod it blocks:
@@ -48,11 +48,11 @@ Run `/config` to change these:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `prodDatabases` | (none) | Comma-separated databases treated as prod, whatever the dbt target is called |
+| `prodDatabases` | (none) | More databases treated as prod, comma-separated, beyond those your `prod` targets point at |
 | `prodDbtTarget` | `prod` | dbt target name also treated as prod |
 | `toastSeconds` | `60` | Toast when a dbt run takes at least this long |
 
-**Set `prodDatabases` to your prod database names.** Until you do, only a target literally named `prod` counts as prod. A dev-named target that points at the prod database is not caught.
+Most teams need no settings: the guard asks dbt where each profile's `prod` target points, and treats that database as prod. If no profile has a target named `prod` (or `prodDbtTarget`) and `prodDatabases` is empty, the mod shows a warning at session start, because then it knows no prod database.
 
 ## Limits
 

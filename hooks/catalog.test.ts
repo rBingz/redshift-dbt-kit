@@ -132,7 +132,7 @@ describe('schema pane', () => {
     expect(runs[0]).toEqual(expect.arrayContaining(['dbt', 'show', '--profile', 'shop', '--target', 'dev', '--output', 'json']))
   })
 
-  test('the target picker lists profiles.yml targets and loads the one picked', { options: { prodDatabases: 'analytics' } }, async ($, on) => {
+  test('the target picker lists profiles.yml targets and loads the one picked', async ($, on) => {
     const runs: string[][] = []
     engine(on, [], runs)
     await $.command.run(RUN_SCHEMA)

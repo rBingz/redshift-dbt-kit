@@ -1,6 +1,6 @@
 {
   "name": "redshift-dbt-guard",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "types": "./types/index.d.ts",
   "author": {
     "name": "rBingz"
@@ -10,7 +10,7 @@
     "prodDatabases": {
       "type": "string",
       "title": "Prod databases",
-      "description": "Comma-separated database names treated as prod, for dbt targets and for SQL sent through aws redshift-data or psql",
+      "description": "More databases treated as prod, comma-separated, beyond those your prod targets point at",
       "default": ""
     },
     "prodDbtTarget": {

@@ -5,9 +5,6 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import { PROFILES_YML, fakeDbt } from './fake-dbt'
 import { dbtCalls, destructiveSql, listProfiles, parseResolved, shellParts, sqlCalls } from './guard'
 
-// prodDatabases is empty by default; these tests name the fixture's prod database.
-const PROD_DB = { options: { prodDatabases: 'analytics' } }
-
 const FILES: Record<string, string> = {
   'home/.dbt/profiles.yml': PROFILES_YML,
   'shop/dbt_project.yml': 'name: shop\nprofile: shop\n',
@@ -18,16 +15,17 @@ const FILES: Record<string, string> = {
 
 // Stand in for the engine beneath the plugin: files, env, clock, dbt, and shells that always succeed.
 // `mtime` is profiles.yml's last change, for the cache tests.
-function engine(on: On, opts: { calls?: string[][]; withDbt?: boolean; mtime?: { value: number } } = {}) {
+function engine(on: On, opts: { calls?: string[][]; withDbt?: boolean; mtime?: { value: number }; profiles?: string } = {}) {
+  const files: Record<string, string> = { ...FILES, ...(opts.profiles === undefined ? {} : { 'home/.dbt/profiles.yml': opts.profiles }) }
   mock.env(on, { USERPROFILE: 'C:/home' })
   mock.clock(on)
   if (opts.withDbt !== false) fakeDbt(on, opts.calls)
-  const find = (path: string) => Object.keys(FILES).find(k => path.replace(/\\/g, '/').endsWith(`/${k}`))
+  const find = (path: string) => Object.keys(files).find(k => path.replace(/\\/g, '/').endsWith(`/${k}`))
   on('fs.exists', ($, e) => ({ value: find(e.path) !== undefined }))
   on('fs.stat', () => ({ value: { kind: 'file' as const, size: 100, mtimeMs: opts.mtime?.value ?? 1, isLink: false } }))
   on('fs.read', ($, e) => {
     const key = find(e.path)
-    return key === undefined ? { deny: `ENOENT ${e.path}` } : { value: FILES[key]! }
+    return key === undefined ? { deny: `ENOENT ${e.path}` } : { value: files[key]! }
   })
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
   on('tool.call', { tool: 'PowerShell' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
@@ -119,7 +117,7 @@ describe('pure checks', () => {
 describe('guard on SQL sent straight to Redshift', () => {
   const AWS = 'aws redshift-data execute-statement --workgroup-name wg'
 
-  test('blocks destructive SQL on a prod database, inline and in files', PROD_DB, async ($, on) => {
+  test('blocks destructive SQL on a prod database, inline and in files', async ($, on) => {
     engine(on)
     expect(await denied($, `${AWS} --database analytics --sql "drop table staging.orders"`)).toContain('DROP through aws redshift-data on prod database analytics')
     expect(await denied($, `${AWS} --database analytics --sql file://cleanup.sql`)).toContain('DROP')
@@ -128,7 +126,7 @@ describe('guard on SQL sent straight to Redshift', () => {
     expect(await denied($, `${AWS} --sql "truncate x"`)).toContain('with no database named')
   })
 
-  test('lets safe SQL and dev databases through', PROD_DB, async ($, on) => {
+  test('lets safe SQL and dev databases through', async ($, on) => {
     engine(on)
     expect(await denied($, `${AWS} --database analytics --sql "select * from mart.orders"`)).toBeUndefined()
     expect(await denied($, `${AWS} --database analytics --sql "delete from x where id = 1"`)).toBeUndefined()
@@ -138,7 +136,7 @@ describe('guard on SQL sent straight to Redshift', () => {
 })
 
 describe('guard on dbt', () => {
-  test('prod is the database dbt resolves for the target, whatever the target is called', PROD_DB, async ($, on) => {
+  test('prod is the database dbt resolves for the target, whatever the target is called', async ($, on) => {
     engine(on)
     expect(await denied($, 'cd shop && dbt run --target prod')).toContain('dbt run against shop.prod (database analytics)')
     expect(await denied($, 'cd billing && dbt run')).toContain('billing.dev (database analytics)')
@@ -150,7 +148,7 @@ describe('guard on dbt', () => {
     expect(await denied($, 'dbt run --target bobdev')).toBeUndefined()
   })
 
-  test('the bypasses the audit found are blocked', PROD_DB, async ($, on) => {
+  test('the bypasses the audit found are blocked', async ($, on) => {
     engine(on)
     expect(await denied($, 'cd shop && dbt test --target dev && dbt run --target prod')).toContain('shop.prod')
     expect(await denied($, 'cd shop && dbt --log-level info run --target prod')).toContain('shop.prod')
@@ -162,7 +160,7 @@ describe('guard on dbt', () => {
     expect(await denied($, 'cd shop; cd ../billing; dbt run')).toContain('billing.dev')
   })
 
-  test('PowerShell is guarded like Bash', PROD_DB, async ($, on) => {
+  test('PowerShell is guarded like Bash', async ($, on) => {
     engine(on)
     const ps = async (command: string) => (await $.tool.call({ tool: 'PowerShell', command })).deny
     expect(await ps('Set-Location billing; dbt run')).toContain('billing.dev (database analytics)')
@@ -193,13 +191,14 @@ describe('guard on dbt', () => {
     expect(await denied($, 'cd shop && dbt test --target prod')).toBeUndefined()
     expect(await denied($, 'cd shop && dbt show --target prod --inline "select * from mart.orders"')).toBeUndefined()
     expect(calls).toHaveLength(0)
-    await bash($, 'cd shop && dbt run')
+    await bash($, 'cd shop && dbt run') // the dev target, and shop.prod to learn the prod database
     await bash($, 'cd shop && dbt build')
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(2)
     expect(calls[0]).toEqual(expect.arrayContaining(['compile', '--profile', 'shop', '--no-introspect']))
+    expect(calls[1]).toEqual(expect.arrayContaining(['--profile', 'shop', '--target', 'prod']))
     mtime.value = 2 // profiles.yml edited: ask dbt again
     await bash($, 'cd shop && dbt run')
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(4)
   })
 
   test('full refreshes and destructive dbt show on prod are blocked', async ($, on) => {
@@ -217,10 +216,31 @@ describe('guard on dbt', () => {
     expect(await denied($, 'aws redshift-data execute-statement --database analytics --sql "truncate x"')).toBeUndefined()
   })
 
-  test('out of the box only a target named prod is prod', async ($, on) => {
+  test('out of the box, the database a prod target points at is prod, whatever target reaches it', async ($, on) => {
     engine(on)
-    expect(await denied($, 'cd shop && dbt run --target prod')).toContain('shop.prod')
-    expect(await denied($, 'cd billing && dbt run')).toBeUndefined() // its database counts once prodDatabases names it
+    expect(await denied($, 'cd billing && dbt run')).toContain('billing.dev (database analytics)')
+    expect(await denied($, 'aws redshift-data execute-statement --database analytics --sql "truncate x"')).toContain('prod database analytics')
+    expect(await denied($, 'cd shop && dbt run')).toBeUndefined()
+  })
+
+  test('prodDatabases adds databases no prod target points at', { options: { prodDatabases: 'dev_alice' } }, async ($, on) => {
+    engine(on)
+    expect(await denied($, 'cd shop && dbt run')).toContain('shop.dev (database dev_alice)')
+  })
+
+  test('with no prod target and no setting, a toast says nothing is known', async ($, on) => {
+    const toasts: string[] = []
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    mock.store(on)
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => ({ value: { command: e.name } }))
+    engine(on, { profiles: 'billing:\n  outputs:\n    dev:\n      dbname: analytics\n  target: dev\n' })
+    await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+    expect(toasts).toEqual([expect.stringContaining('no prod database known. Set prodDatabases in /config')])
+    expect(await denied($, 'cd billing && dbt run')).toBeUndefined()
   })
 
   test('other tools pass untouched', async ($, on) => {

@@ -174,12 +174,12 @@ export function explainPrompt(result: QueryResult): string {
 
 // The team's conventions, added to Claude's system prompt so the panes fill without anyone asking.
 export function conventions(prodDatabases: string[], prodTarget: string): string {
-  const byDatabase = prodDatabases.length ? `any target whose database is ${prodDatabases.map(d => `\`${d}\``).join(' or ')}, or ` : ''
+  const also = prodDatabases.length ? `, plus database ${prodDatabases.map(d => `\`${d}\``).join(' and ')}` : ''
   return [
     '# Redshift + dbt (redshift-dbt-guard)',
     '- Query Redshift through dbt on a dev target: `dbt show --target <dev target> --output json --limit 200 --inline "<select ...>"`. JSON output fills the user\'s Query results pane; text output does not.',
     '- Pass --target on every dbt command, and --profile outside a dbt project, so the guard and the status line know the environment.',
-    `- Prod is ${byDatabase}the target \`${prodTarget}\`. On prod the guard blocks dbt run, build, seed, snapshot, run-operation and --full-refresh, and destructive SQL through dbt show. If a call is blocked, do not work around it: tell the user what to run on prod themselves.`,
+    `- Prod is the target \`${prodTarget}\` and the database it points at${also}. Any target that points at a prod database is prod too, whatever it is called. On prod the guard blocks dbt run, build, seed, snapshot, run-operation and --full-refresh, and destructive SQL through dbt show. If a call is blocked, do not work around it: tell the user what to run on prod themselves.`,
     '- Explore with SELECT. Never DROP, TRUNCATE, DELETE or UPDATE without WHERE, ALTER ... DROP, GRANT or REVOKE on prod.',
     '- Avoid dbt commands on lines of a heredoc body: the guard reads each line as a command, so it checks them as if they ran. Quoted text is fine.',
     '- To check whether a column exists, the user can open /rs-schema.',

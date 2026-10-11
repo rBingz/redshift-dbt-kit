@@ -76,7 +76,7 @@ async function resolveTarget($: EngineInterface, dir: string, profile: string, t
 
 // The targets a dbt command would use. The profile comes from --profile or the project's
 // dbt_project.yml; when neither names one, every profile with that target counts, so prod wins.
-async function dbtTargets($: EngineInterface, dbt: DbtCall): Promise<{ envs: Env[] } | { error: string }> {
+async function dbtTargets($: EngineInterface, dbt: DbtCall): Promise<{ envs: Env[]; dir: string } | { error: string }> {
   const dir = await profilesDir($, dbt)
   if (dir === undefined) return { error: 'no profiles.yml found' }
   // dbt's order: --profile (or DBT_PROFILE in the command), $DBT_PROFILE, then dbt_project.yml.
@@ -102,10 +102,27 @@ async function dbtTargets($: EngineInterface, dbt: DbtCall): Promise<{ envs: Env
     if (names.length === 0) return { error: dbt.target ? `no profile has a target named ${dbt.target}` : 'no profiles in profiles.yml' }
   }
   try {
-    return { envs: await Promise.all(names.map(p => resolveTarget($, dir, p, dbt.target))) }
+    return { envs: await Promise.all(names.map(p => resolveTarget($, dir, p, dbt.target))), dir }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+// The databases the targets named `prodTarget` point at, as dbt resolves them. They are prod
+// whatever other target reaches them, so a dev-named target writing to one is caught with no setting.
+async function prodTargetDatabases($: EngineInterface, dir: string, prodTarget: string): Promise<string[]> {
+  let listed: Record<string, string[]>
+  try {
+    listed = listProfiles(await $.fs.read(`${dir}/profiles.yml`))
+  } catch {
+    return []
+  }
+  const found = await Promise.all(
+    Object.entries(listed)
+      .filter(([, outputs]) => outputs.includes(prodTarget))
+      .map(([profile]) => resolveTarget($, dir, profile, prodTarget).then(r => r.dbname, () => undefined)),
+  )
+  return found.filter((db): db is string => db !== undefined)
 }
 
 // Fill in each listed target's database for the picker, as dbt resolves it: three dbt processes
@@ -252,7 +269,10 @@ export const register: Register = (on, options) => {
   const prodDatabases = list(options.prodDatabases)
   const prodTarget = String(options.prodDbtTarget ?? 'prod')
   const toastSeconds = Number(options.toastSeconds ?? 60)
-  const isProdEnv = (e: Env) => e.target === prodTarget || (e.dbname !== undefined && prodDatabases.includes(e.dbname))
+  // Prod databases learned from the targets named prodTarget, beside the configured ones.
+  const learned = new Set<string>()
+  const isProdDb = (db: string) => prodDatabases.includes(db) || learned.has(db)
+  const isProdEnv = (e: Env) => e.target === prodTarget || (e.dbname !== undefined && isProdDb(e.dbname))
   const shown: { dbt?: Env } = {}
 
   const statusText = () => {
@@ -262,15 +282,23 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     $.ui.status(statusText())
-    // The status line's target, as dbt resolves it, once dbt has started (seconds): only in a dbt project.
-    void (async () => {
+    // Nothing to learn prod from and nothing configured: say so once, rather than guard nothing quietly.
+    const listed = await profilesDir($, HERE)
+      .then(async dir => (dir === undefined ? {} : listProfiles(await $.fs.read(`${dir}/profiles.yml`))))
+      .catch((): Record<string, string[]> => ({}))
+    const hasDbt = Object.keys(listed).length > 0
+    if (hasDbt && prodDatabases.length === 0 && !Object.values(listed).some(outputs => outputs.includes(prodTarget))) {
+      $.ui.toast(`⚠ redshift-dbt-guard: no prod database known. Set prodDatabases in /config, or name your prod target "${prodTarget}".`)
+    }
+    // In a dbt project: the status line's target and the prod databases, once dbt has started (seconds).
+    if (hasDbt) void (async () => {
       const project = await $.fs.read('dbt_project.yml').catch(() => '')
       if (!/^profile:/m.test(project)) return
       const found = await dbtTargets($, HERE)
-      if ('envs' in found && found.envs.length === 1) {
-        shown.dbt = found.envs[0]
-        $.ui.status(statusText())
-      }
+      if (!('envs' in found)) return
+      for (const db of await prodTargetDatabases($, found.dir, prodTarget)) learned.add(db)
+      if (found.envs.length === 1) shown.dbt = found.envs[0]
+      $.ui.status(statusText())
     })().catch(() => {})
     await $.command.register({ name: 'dbt-board', description: 'Show the last dbt run as a pane' })
     await $.command.register({ name: 'rs-results', description: 'Show the last query result as a pane' })
@@ -479,6 +507,9 @@ export const register: Register = (on, options) => {
     const picked = await read($, env)
     const known = await read($, envs)
     const options = picked && !known.some(k => envLabel(k) === envLabel(picked)) ? [picked, ...known] : known
+    // The picker has resolved every target, prod-named ones included: their databases are prod too.
+    const prodDbs = new Set(known.filter(k => k.target === prodTarget && k.dbname !== undefined).map(k => k.dbname!))
+    const isProdHere = (o: Env) => isProdEnv(o) || (o.dbname !== undefined && prodDbs.has(o.dbname))
     const room = Math.max(3, (e.viewport?.rows ?? 24) - 11)
     const { total, matches } = searchCatalog(cat.columns, query, room)
     const age = cat.fetchedAt !== undefined ? ` · refreshed ${ago((await $.clock.now()) - cat.fetchedAt)}` : ''
@@ -494,7 +525,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Box borderStyle="round" borderColor={picked && isProdEnv(picked) ? 'warning' : 'claude'} paddingX={1}>
+        <Box borderStyle="round" borderColor={picked && isProdHere(picked) ? 'warning' : 'claude'} paddingX={1}>
           <Text wrap="truncate-end">
             <Text color="claude" bold>✻ Schema</Text>
             <Text dimColor> · {cat.columns.length.toLocaleString('en-US')} columns · {source}{age}</Text>
@@ -507,7 +538,7 @@ export const register: Register = (on, options) => {
               label="target"
               options={options.map(o => ({
                 value: envLabel(o),
-                label: `${isProdEnv(o) ? '⚠ ' : ''}${envLabel(o)}${o.dbname ? ` · ${o.dbname}` : ''}`,
+                label: `${isProdHere(o) ? '⚠ ' : ''}${envLabel(o)}${o.dbname ? ` · ${o.dbname}` : ''}`,
               }))}
               value={picked ? envLabel(picked) : undefined}
               onSelect={v => {
@@ -622,7 +653,11 @@ export const register: Register = (on, options) => {
       const bad = destructiveSql(sql)
       if (bad === undefined) continue
       if (call.database === undefined) return deny(`${bad} through ${call.tool} with no database named is blocked.`)
-      if (prodDatabases.includes(call.database)) return deny(`${bad} through ${call.tool} on prod database ${call.database} is blocked.`)
+      if (!isProdDb(call.database)) {
+        const dir = await profilesDir($, HERE)
+        if (dir !== undefined) for (const db of await prodTargetDatabases($, dir, prodTarget)) learned.add(db)
+      }
+      if (isProdDb(call.database)) return deny(`${bad} through ${call.tool} on prod database ${call.database} is blocked.`)
     }
 
     // dbt: prod is the database dbt itself resolves for the target (or a target named prodDbtTarget).
@@ -637,6 +672,7 @@ export const register: Register = (on, options) => {
       const found = await dbtTargets($, dbt)
       // Fail closed: what cannot be told apart from prod is treated as prod.
       if ('error' in found) return { deny: `${$.plugin.name}: cannot tell which database this dbt command would use (${found.error}). Pass --profile and --target, or fix profiles.yml.` }
+      for (const db of await prodTargetDatabases($, found.dir, prodTarget)) learned.add(db)
       resolved = found.envs
       const prod = found.envs.find(isProdEnv)
       const where = prod && `${envLabel(prod)}${prod.dbname ? ` (database ${prod.dbname})` : ''}`
