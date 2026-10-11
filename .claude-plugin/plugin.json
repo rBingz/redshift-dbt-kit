@@ -1,11 +1,11 @@
 {
-  "name": "redshift-dbt-guard",
-  "version": "0.4.0",
+  "name": "redshift-dbt-kit",
+  "version": "0.5.0",
   "types": "./types/index.d.ts",
   "author": {
     "name": "rBingz"
   },
-  "description": "Guards prod Redshift from Claude's dbt and SQL commands; panes for dbt runs, query results, schema search and model cards",
+  "description": "Redshift + dbt tools for Claude Code: dbt run board, query results, schema search and model cards, plus a guard against prod writes",
   "userConfig": {
     "prodDatabases": {
       "type": "string",

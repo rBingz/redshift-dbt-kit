@@ -27,7 +27,7 @@ export type ModelCard = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'redshift-dbt-guard': {
+    'redshift-dbt-kit': {
       board: Board | null
       results: QueryResult | null
       page: number

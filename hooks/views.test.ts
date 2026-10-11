@@ -48,7 +48,7 @@ function engine(on: On) {
 }
 
 const pane = (requestId: string, title: string) => ({
-  plugin: 'redshift-dbt-guard',
+  plugin: 'redshift-dbt-kit',
   component: 'Pane' as const,
   requestId,
   props: { title, isFocused: false, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 20 }, view: {} },
@@ -184,7 +184,7 @@ describe('ask Claude', () => {
       outputStyle: { name: 'default', isKeepingCodingInstructions: true },
       traits: [],
     })
-    expect(sections.map(s => s.id)).toEqual(['intro', 'redshift-dbt-guard:conventions'])
+    expect(sections.map(s => s.id)).toEqual(['intro', 'redshift-dbt-kit:conventions'])
     expect(sections[1]!.scope).toBe('session')
     expect(sections[1]!.text).toContain('Prod is the target `prod` and the database it points at, plus database `analytics` and `archive`.')
     expect(conventions([], 'prod')).toContain('- Prod is the target `prod` and the database it points at. Any target')

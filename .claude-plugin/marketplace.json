@@ -1,6 +1,6 @@
 {
-  "name": "redshift-dbt-guard",
+  "name": "redshift-dbt-kit",
   "owner": { "name": "rBingz" },
-  "metadata": { "description": "Guards prod Redshift from Claude's dbt and SQL commands; panes for dbt runs, query results, schema search and model cards" },
-  "plugins": [{ "name": "redshift-dbt-guard", "source": "./" }]
+  "metadata": { "description": "Redshift + dbt tools for Claude Code: dbt run board, query results, schema search and model cards, plus a guard against prod writes" },
+  "plugins": [{ "name": "redshift-dbt-kit", "source": "./" }]
 }

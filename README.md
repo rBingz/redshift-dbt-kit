@@ -1,4 +1,4 @@
-# redshift-dbt-guard
+# redshift-dbt-kit
 
 A Claude Code mod for teams on Redshift + dbt.
 
@@ -39,7 +39,7 @@ You need:
 **From GitHub.** Run this in a terminal:
 
 ```
-claude plugin install redshift-dbt-guard --marketplace rBingz/redshift-dbt-guard --scope user
+claude plugin install redshift-dbt-kit --marketplace rBingz/redshift-dbt-kit --scope user
 ```
 
 If the repo is private, you need read access to it and `gh auth login` done first.
@@ -47,14 +47,14 @@ If the repo is private, you need read access to it and `gh auth login` done firs
 **From a folder** (to share it privately, for example in a repo your team can already read): copy this whole folder there, then each person runs:
 
 ```
-claude plugin install redshift-dbt-guard --marketplace <path to the copied folder> --scope user
+claude plugin install redshift-dbt-kit --marketplace <path to the copied folder> --scope user
 ```
 
 Either way, restart Claude Code afterwards. The install says 3 settings are not set yet: that is fine, each has a working default (see Configure).
 
 ## Update
 
-- **From GitHub:** `claude plugin marketplace update redshift-dbt-guard`, then restart Claude Code.
+- **From GitHub:** `claude plugin marketplace update redshift-dbt-kit`, then restart Claude Code.
 - **From a folder:** the mod is read from the folder itself. Pull or copy the new files there, then restart Claude Code.
 
 Run `claude plugin list` to see the version you have.
@@ -69,7 +69,7 @@ Open an issue on the repo, or tell whoever shared the mod with you. Include:
 
 ## Configure
 
-Run `/plugin configure redshift-dbt-guard@redshift-dbt-guard` in Claude Code to change these:
+Run `/plugin configure redshift-dbt-kit@redshift-dbt-kit` in Claude Code to change these:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |

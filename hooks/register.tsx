@@ -13,23 +13,23 @@ const BOARD = 'dbt-board'
 const RESULTS = 'rs-results'
 const SCHEMA = 'rs-schema'
 const MODEL = 'dbt-model'
-const board = atom({ plugin: 'redshift-dbt-guard', key: 'board' } as const, null)
-const results = atom({ plugin: 'redshift-dbt-guard', key: 'results' } as const, null)
-const page = atom({ plugin: 'redshift-dbt-guard', key: 'page' } as const, 0)
-const running = atom({ plugin: 'redshift-dbt-guard', key: 'running' } as const, null)
-const tick = atom({ plugin: 'redshift-dbt-guard', key: 'tick' } as const, 0)
+const board = atom({ plugin: 'redshift-dbt-kit', key: 'board' } as const, null)
+const results = atom({ plugin: 'redshift-dbt-kit', key: 'results' } as const, null)
+const page = atom({ plugin: 'redshift-dbt-kit', key: 'page' } as const, 0)
+const running = atom({ plugin: 'redshift-dbt-kit', key: 'running' } as const, null)
+const tick = atom({ plugin: 'redshift-dbt-kit', key: 'tick' } as const, 0)
 const EMPTY: Catalog = { status: 'empty', columns: [] }
-const catalog = atom({ plugin: 'redshift-dbt-guard', key: 'catalog' } as const, EMPTY)
-const search = atom({ plugin: 'redshift-dbt-guard', key: 'search' } as const, '')
-const card = atom({ plugin: 'redshift-dbt-guard', key: 'card' } as const, null)
-const env = atom({ plugin: 'redshift-dbt-guard', key: 'env' } as const, null)
+const catalog = atom({ plugin: 'redshift-dbt-kit', key: 'catalog' } as const, EMPTY)
+const search = atom({ plugin: 'redshift-dbt-kit', key: 'search' } as const, '')
+const card = atom({ plugin: 'redshift-dbt-kit', key: 'card' } as const, null)
+const env = atom({ plugin: 'redshift-dbt-kit', key: 'env' } as const, null)
 const NO_ENVS: Env[] = []
-const envs = atom({ plugin: 'redshift-dbt-guard', key: 'envs' } as const, NO_ENVS)
+const envs = atom({ plugin: 'redshift-dbt-kit', key: 'envs' } as const, NO_ENVS)
 
 const envLabel = (e: Env) => `${e.profile}.${e.target}`
 
 const lastLines = (text: string) => text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(-2).join(' ')
-const tempDir = async ($: EngineInterface) => `${(await $.env.get('TEMP')) ?? (await $.env.get('TMPDIR')) ?? '/tmp'}/redshift-dbt-guard`
+const tempDir = async ($: EngineInterface) => `${(await $.env.get('TEMP')) ?? (await $.env.get('TMPDIR')) ?? '/tmp'}/redshift-dbt-kit`
 
 // A dbt call with nothing on its command line: the session's own folder and settings.
 const HERE: DbtCall = { verb: '', isWrite: false, hasShow: false, fullRefresh: false, cwd: '.' }
@@ -140,7 +140,7 @@ async function learnProdDatabases($: EngineInterface, dir: string, prodTarget: s
             const label = `${profile}.${prodTarget}`
             if (!warnedProd.has(label)) {
               warnedProd.add(label)
-              $.ui.toast(`⚠ redshift-dbt-guard: cannot tell which database ${label} points at (${err instanceof Error ? err.message : String(err)}), so other targets on it are not guarded. Set prodDatabases with /plugin configure redshift-dbt-guard@redshift-dbt-guard.`)
+              $.ui.toast(`⚠ redshift-dbt-kit: cannot tell which database ${label} points at (${err instanceof Error ? err.message : String(err)}), so other targets on it are not guarded. Set prodDatabases with /plugin configure redshift-dbt-kit@redshift-dbt-kit.`)
             }
             return undefined
           },
@@ -160,7 +160,7 @@ async function loginTip($: EngineInterface, dev: Resolved, prods: Resolved[]) {
   const key = `tip:login:${prod.user}`
   if (await $.store.get(key)) return
   await $.store.set(key, true)
-  $.ui.toast(`✻ redshift-dbt-guard tip: ${dev.profile}.${dev.target} and ${prod.profile}.${prod.target} log in as the same user (${prod.user}), so anything run on dev can also write prod. A dev login without write rights on prod closes that for good; the guard is only a seatbelt.`)
+  $.ui.toast(`✻ redshift-dbt-kit tip: ${dev.profile}.${dev.target} and ${prod.profile}.${prod.target} log in as the same user (${prod.user}), so anything run on dev can also write prod. A dev login without write rights on prod closes that for good; the guard is only a seatbelt.`)
 }
 
 // Fill in each listed target's database for the picker, as dbt resolves it: three dbt processes
@@ -351,7 +351,7 @@ export const register: Register = (on, options) => {
     const hasDbt = Object.keys(listed).length > 0
     // A profile with no listed outputs (flow style, an alias) may hold a prod target: no warning then.
     if (hasDbt && prodDatabases.length === 0 && !Object.values(listed).some(outputs => outputs.length === 0 || outputs.includes(prodTarget))) {
-      $.ui.toast(`⚠ redshift-dbt-guard: no prod database known. Set prodDatabases with /plugin configure redshift-dbt-guard@redshift-dbt-guard, or name your prod target "${prodTarget}".`)
+      $.ui.toast(`⚠ redshift-dbt-kit: no prod database known. Set prodDatabases with /plugin configure redshift-dbt-kit@redshift-dbt-kit, or name your prod target "${prodTarget}".`)
     }
     // In a dbt project: the status line's target and the prod databases, once dbt has started (seconds).
     if (hasDbt) void (async () => {
@@ -377,7 +377,7 @@ export const register: Register = (on, options) => {
   })
 
   // The team's conventions, last in the system prompt (after the cache boundary: they vary with the settings).
-  const section = { id: 'redshift-dbt-guard:conventions', text: conventions(prodDatabases, prodTarget), scope: 'session' } as const
+  const section = { id: 'redshift-dbt-kit:conventions', text: conventions(prodDatabases, prodTarget), scope: 'session' } as const
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     return { sections: [...composed.sections, section] }
@@ -780,6 +780,6 @@ export const register: Register = (on, options) => {
     }
     return ran
   }).catch(($, e, next) =>
-    next.called ? next(e) : isShell(e.tool) ? { deny: 'redshift-dbt-guard: its guard failed, so the command is blocked.' } : next(e),
+    next.called ? next(e) : isShell(e.tool) ? { deny: 'redshift-dbt-kit: its guard failed, so the command is blocked.' } : next(e),
   )
 }

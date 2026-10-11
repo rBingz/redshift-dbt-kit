@@ -280,7 +280,7 @@ describe('guard on dbt', () => {
     on('command.register', ($, e) => ({ value: { command: e.name } }))
     engine(on, { profiles: 'billing:\n  outputs:\n    dev:\n      dbname: analytics\n  target: dev\n' })
     await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
-    expect(toasts).toEqual([expect.stringContaining('no prod database known. Set prodDatabases with /plugin configure redshift-dbt-guard@redshift-dbt-guard')])
+    expect(toasts).toEqual([expect.stringContaining('no prod database known. Set prodDatabases with /plugin configure redshift-dbt-kit@redshift-dbt-kit')])
     expect(await denied($, 'cd billing && dbt run')).toBeUndefined()
   })
 

@@ -69,7 +69,7 @@ function engine(on: On, filled: string[] = [], runs: string[][] = [], dbtSays = 
 }
 
 const pane = (requestId: string, title: string) => ({
-  plugin: 'redshift-dbt-guard',
+  plugin: 'redshift-dbt-kit',
   component: 'Pane' as const,
   requestId,
   props: { title, isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 20 }, view: {} },

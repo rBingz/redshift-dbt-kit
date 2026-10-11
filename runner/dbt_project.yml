@@ -1,6 +1,6 @@
 # A dbt project with no models. The schema browser runs `dbt show --inline` from here
 # with your own --profile and --target, so it needs none of your projects on disk.
-name: redshift_dbt_guard_runner
+name: redshift_dbt_kit_runner
 version: "1.0"
 config-version: 2
-profile: redshift_dbt_guard_runner
+profile: redshift_dbt_kit_runner
