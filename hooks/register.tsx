@@ -615,7 +615,7 @@ export const register: Register = (on, options) => {
             <Text color="claude">› </Text>orders cust<Text color="claude">▏</Text>
           </Text>,
           ...matches.map(m => (
-            <Text>
+            <Text wrap="truncate-end">
               {m.isExact ? <Text color="success">✓ </Text> : '  '}
               {m.parts.map(part => (part.isHit ? <Text color="claude" bold>{part.text}</Text> : part.text))}
               <Text dimColor>  {m.type}</Text>
@@ -625,29 +625,29 @@ export const register: Register = (on, options) => {
       }
       if (kind === 'card') {
         return [
-          <Text>
+          <Text wrap="truncate-end">
             <Text color="claude" bold>✻ orders</Text>
             <Text dimColor> · incremental · "analytics"."mart"."orders"</Text>
           </Text>,
           <Text>One row per order, with its payments.</Text>,
           <Text><Text color="claude">↑ </Text>stg_orders, src:raw.payments</Text>,
           <Text><Text color="claude">↓ </Text>2 downstream: fct_revenue, rpt_daily</Text>,
-          <Text><Text color="success">✓ </Text>3 tests: unique_orders_order_id, not_null_orders_order_id, …</Text>,
+          <Text wrap="truncate-end"><Text color="success">✓ </Text>3 tests: unique_orders_order_id, not_null_orders_order_id, …</Text>,
           <Text><Text color="claude">▤ </Text>8/10 columns documented</Text>,
         ]
       }
       if (kind === 'buttons') {
         return [
-          <Text><Text inverse> fix </Text><Text dimColor>  → find why customers failed, fix it, re-run it on dev</Text></Text>,
-          <Text><Text inverse> explain </Text><Text dimColor>  → explain this result and point out anything odd</Text></Text>,
-          <Text><Text inverse> fill the gaps </Text><Text dimColor>  → add the missing description, tests and column docs</Text></Text>,
+          <Box><Box flexShrink={0}><Text><Text inverse> fix </Text>  → </Text></Box><Text dimColor>find why customers failed, fix it, re-run it on dev</Text></Box>,
+          <Box><Box flexShrink={0}><Text><Text inverse> explain </Text>  → </Text></Box><Text dimColor>explain this result and point out anything odd</Text></Box>,
+          <Box><Box flexShrink={0}><Text><Text inverse> fill the gaps </Text>  → </Text></Box><Text dimColor>add the missing description, tests and column docs</Text></Box>,
         ]
       }
       return [
         <Text color="claude" bold>/rs-profile mart.orders</Text>,
-        <Text color="claude">{'column'.padEnd(14)}{'nulls'.padEnd(9)}{'distinct'.padEnd(10)}min … max</Text>,
-        <Text>{'order_id'.padEnd(14)}{'0%'.padEnd(9)}{'1,204'.padEnd(10)}1 … 1204</Text>,
-        <Text>{'customer_id'.padEnd(14)}{'0.4%'.padEnd(9)}{'388'.padEnd(10)}3 … 991</Text>,
+        <Text color="claude" wrap="truncate-end">{'column'.padEnd(14)}{'nulls'.padEnd(9)}{'distinct'.padEnd(10)}min … max</Text>,
+        <Text wrap="truncate-end">{'order_id'.padEnd(14)}{'0%'.padEnd(9)}{'1,204'.padEnd(10)}1 … 1204</Text>,
+        <Text wrap="truncate-end">{'customer_id'.padEnd(14)}{'0.4%'.padEnd(9)}{'388'.padEnd(10)}3 … 991</Text>,
       ]
     }
 
@@ -672,17 +672,26 @@ export const register: Register = (on, options) => {
             <Text> </Text>
             {s.checks.map(c => (
               <Box key={`check-${c.key}`} flexDirection="column">
-                <Text>
-                  {c.state === 'checking' ? (
-                    <Text color="claude" bold>{` ${spin}    `}</Text>
-                  ) : (
-                    <Text backgroundColor={CHIP[c.state].color} color="inverseText" bold>{CHIP[c.state].label}</Text>
-                  )}
-                  {' '.repeat(c.state === 'checking' ? 1 : 7 - CHIP[c.state].label.length)}
-                  <Text bold>{c.label.padEnd(13)}</Text>
-                  {c.state === 'checking' ? <Text dimColor>checking…</Text> : c.detail}
-                </Text>
-                {c.fix !== undefined && c.state !== 'ok' && c.state !== 'checking' && <Text dimColor>{'        › '}{c.fix}</Text>}
+                <Box>
+                  <Box flexShrink={0}>
+                    <Text>
+                      {c.state === 'checking' ? (
+                        <Text color="claude" bold>{` ${spin}    `}</Text>
+                      ) : (
+                        <Text backgroundColor={CHIP[c.state].color} color="inverseText" bold>{CHIP[c.state].label}</Text>
+                      )}
+                      {' '.repeat(c.state === 'checking' ? 1 : 7 - CHIP[c.state].label.length)}
+                      <Text bold>{c.label.padEnd(13)}</Text>
+                    </Text>
+                  </Box>
+                  {c.state === 'checking' ? <Text dimColor>checking…</Text> : <Text>{c.detail}</Text>}
+                </Box>
+                {c.fix !== undefined && c.state !== 'ok' && c.state !== 'checking' && (
+                  <Box paddingLeft={8}>
+                    <Box flexShrink={0}><Text dimColor>› </Text></Box>
+                    <Text dimColor>{c.fix}</Text>
+                  </Box>
+                )}
               </Box>
             ))}
           </Box>
@@ -695,10 +704,10 @@ export const register: Register = (on, options) => {
               {preview(p.preview)}
             </Box>
             {p.bullets.map(b => (
-              <Text>
-                <Text color="claude">› </Text>
-                {b}
-              </Text>
+              <Box>
+                <Box flexShrink={0}><Text color="claude">› </Text></Box>
+                <Text>{b}</Text>
+              </Box>
             ))}
             {p.tryIt && (
               <Box marginTop={1}>
