@@ -40,10 +40,15 @@ function engine(on: On) {
   fakeDbt(on)
   on('fs.exists', () => ({ value: false }))
   on('fs.read', ($, e) =>
-    e.path.replace(/\\/g, '/').endsWith('/target/run_results.json') ? { value: RUN_RESULTS } : { deny: `ENOENT ${e.path}` },
+    e.path.replace(/\\/g, '/').endsWith('/target/run_results.json') ? { value: RUN_RESULTS }
+    : e.path.endsWith('big.txt') ? { value: STATEMENT }
+    : { deny: `ENOENT ${e.path}` },
   )
+  // `--id big` prints more than Claude Code shows inline: a cut preview, the whole of it in a file.
   on('tool.call', { tool: 'Bash' }, ($, e) => ({
-    result: { stdout: e.command.includes('get-statement-result') ? STATEMENT : '', stderr: '', interrupted: false },
+    result: e.command.includes('--id big')
+      ? { stdout: STATEMENT.slice(0, 200), stderr: '', interrupted: false, persistedOutputPath: 'C:/session/tool-results/big.txt', persistedOutputSize: STATEMENT.length }
+      : { stdout: e.command.includes('get-statement-result') ? STATEMENT : '', stderr: '', interrupted: false },
   }))
 }
 
@@ -126,6 +131,13 @@ describe('panes', () => {
       await ui.press({ key: 'prev' })
       await ui.unmount()
     }
+  })
+
+  test('query results too big to show inline are read from the saved output', async ($, on) => {
+    engine(on)
+    await $.tool.call({ tool: 'Bash', command: 'aws redshift-data get-statement-result --id big' })
+    const ui = await $.ui.mount({ surface: 'terminal', ...pane('rs-results', '✻ Query results') })
+    expect(await ui.find({ type: 'Text', text: /✻ 30 rows · 3 columns · statement big/ })).toBeDefined()
   })
 
   test('panes say so before anything ran', async ($, on) => {

@@ -1110,7 +1110,10 @@ export const register: Register = (on, options) => {
     }
     if (ran.deny === undefined) {
       const out: unknown = ran.result
-      const stdout = typeof out === 'object' && out !== null && 'stdout' in out ? String(out.stdout) : ''
+      const field = (k: string) => (typeof out === 'object' && out !== null && k in out ? String((out as Record<string, unknown>)[k]) : undefined)
+      // Output too big to show inline comes back as a preview; Claude Code keeps the whole of it in this file.
+      const saved = field('persistedOutputPath')
+      const stdout = saved ? await $.fs.read(saved).catch(() => '') : (field('stdout') ?? '')
       await capture($, cmd, primary, stdout, startedAt)
     }
     return ran
