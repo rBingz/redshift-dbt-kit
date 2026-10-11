@@ -1,11 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Board, Catalog, Env, ModelCard, QueryResult, Running } from '../types'
+import type { Board, Catalog, Check, Env, ModelCard, QueryResult, Running, Setup } from '../types'
 import { CATALOG_SQL, ago, modelCard, modelPath, parseDbtShow, searchCatalog } from './catalog'
 import type { Manifest } from './catalog'
 import { RESOLVE_SQL, dbtCalls, destructiveSql, listProfiles, parseResolved, sqlCalls } from './guard'
 import type { DbtCall, Resolved } from './guard'
+import { dbtVersion, tourPages } from './kit'
 import { SPINNER, areaCells, chip, conventions, explainPrompt, fixPrompt, heat, improvePrompt, isFailed, numericColumns, parseRunResults, parseStatementResult, smoothBar, sparkline, statusCounts, textTable } from './views'
 
 const TIMED = new Set(['run', 'build', 'test', 'seed', 'snapshot'])
@@ -25,6 +26,10 @@ const card = atom({ plugin: 'redshift-dbt-kit', key: 'card' } as const, null)
 const env = atom({ plugin: 'redshift-dbt-kit', key: 'env' } as const, null)
 const NO_ENVS: Env[] = []
 const envs = atom({ plugin: 'redshift-dbt-kit', key: 'envs' } as const, NO_ENVS)
+const KIT = 'kit'
+const NO_SETUP: Setup = { checks: [] }
+const setup = atom({ plugin: 'redshift-dbt-kit', key: 'setup' } as const, NO_SETUP)
+const tour = atom({ plugin: 'redshift-dbt-kit', key: 'tour' } as const, 0)
 
 const envLabel = (e: Env) => `${e.profile}.${e.target}`
 
@@ -164,14 +169,16 @@ async function loginTip($: EngineInterface, dev: Resolved, prods: Resolved[]) {
 }
 
 // Fill in each listed target's database for the picker, as dbt resolves it: three dbt processes
-// at a time, so a profiles.yml with many targets does not start them all at once.
-async function fillDatabases($: EngineInterface, dir: string, listed: Env[]) {
+// at a time, so a profiles.yml with many targets does not start them all at once. Returns those resolved.
+async function fillDatabases($: EngineInterface, dir: string, listed: Env[]): Promise<Resolved[]> {
   const queue = [...listed]
+  const found: Resolved[] = []
   const worker = async () => {
     for (let e = queue.shift(); e !== undefined; e = queue.shift()) {
       const one = e
       try {
         const r = await resolveTarget($, dir, one.profile, one.target)
+        found.push(r)
         await update($, envs, all => all.map(o => (envLabel(o) === envLabel(one) ? { ...o, dbname: r.dbname } : o)))
       } catch {
         // left without a database: the picker shows the name alone
@@ -179,6 +186,100 @@ async function fillDatabases($: EngineInterface, dir: string, listed: Env[]) {
     }
   }
   await Promise.all([worker(), worker(), worker()])
+  return found
+}
+
+// The /kit setup check. Each line fills in as its answer comes, so the pane shows progress, and each
+// line that is not ok says how to fix it.
+const CHECKS: [key: string, label: string][] = [['dbt', 'dbt'], ['profiles', 'profiles.yml'], ['project', 'dbt project'], ['prod', 'prod'], ['login', 'logins'], ['python', 'Python']]
+const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`
+async function runSetup($: EngineInterface, prodTarget: string, prodDatabases: string[], learned: Set<string>) {
+  await update($, setup, s => ({ ...s, checks: CHECKS.map(([key, label]) => ({ key, label, state: 'checking' as const, detail: 'checking…' })) }))
+  const put = (key: string, state: Check['state'], detail: string, fix?: string) =>
+    update($, setup, s => ({ ...s, checks: s.checks.map(c => (c.key === key ? { ...c, state, detail, fix } : c)) }))
+
+  const project = await $.fs.read(`${HERE.cwd}/dbt_project.yml`).catch(() => '')
+  const projectProfile = project.match(/^profile:\s*["']?([\w-]+)/m)?.[1]
+  if (projectProfile !== undefined) await put('project', 'ok', `started in a dbt project (profile ${projectProfile})`)
+  else await put('project', 'warn', 'not started in a dbt project', 'Start Claude Code in your dbt project folder: the status line, run board and model card follow the project you are in.')
+
+  const manifest = await $.fs.stat(`${HERE.cwd}/target/manifest.json`).catch(() => undefined)
+  if (manifest === undefined || manifest.size <= MAX_READ) {
+    await put('python', 'ok', `not needed${manifest ? ` (manifest.json is ${mb(manifest.size)})` : ''}`)
+  } else {
+    let works: string | undefined
+    for (const exe of PYTHONS) {
+      const ran = await $.process.run([exe, '--version'], { timeoutMs: 30_000 }).catch(() => undefined)
+      if (ran?.exitCode === 0) {
+        works = exe
+        break
+      }
+    }
+    if (works !== undefined) {
+      python = works
+      await put('python', 'ok', `${works} works; the model card needs it for this ${mb(manifest.size)} manifest.json`)
+    } else {
+      await put('python', 'fail', `manifest.json is ${mb(manifest.size)}, and no python3, python or py works`, 'Install Python 3, or make python3, python or py work in this terminal: the model card needs it to read a manifest this big.')
+    }
+  }
+
+  const ran = await $.process
+    .run(['dbt', '--version'], { timeoutMs: 120_000 })
+    .catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: err instanceof Error ? err.message : String(err) }))
+  const version = ran.exitCode === 0 ? dbtVersion(`${ran.stdout}\n${ran.stderr}`) : undefined
+  if (version !== undefined) await put('dbt', 'ok', `dbt ${version} on PATH`)
+  else await put('dbt', 'fail', `dbt did not start: ${lastLines(`${ran.stdout}\n${ran.stderr}`) || `exit ${ran.exitCode}`}`, 'Install dbt, or start Claude Code from a terminal where dbt works (an activated virtualenv), then run /kit again.')
+
+  const dir = await profilesDir($, HERE)
+  let listed: Record<string, string[]> = {}
+  try {
+    if (dir !== undefined) listed = listProfiles(await $.fs.read(`${dir}/profiles.yml`))
+  } catch {
+    // reported below
+  }
+  const all: Env[] = Object.entries(listed).flatMap(([profile, outputs]) => outputs.map(target => ({ profile, target })))
+  if (dir === undefined || Object.keys(listed).length === 0) {
+    await put('profiles', 'fail', `no profiles.yml found${dir === undefined ? '' : ` in ${dir}`}`, 'Put profiles.yml in ~/.dbt, set DBT_PROFILES_DIR, or start Claude Code in the folder that holds it.')
+    await put('prod', 'fail', 'needs profiles.yml')
+    await put('login', 'fail', 'needs profiles.yml')
+    return
+  }
+  await put('profiles', 'ok', `${dir}/profiles.yml: ${Object.keys(listed).length} profiles, ${all.length} targets`)
+  if (version === undefined) {
+    await put('prod', 'fail', 'needs dbt: dbt itself says where each target points')
+    await put('login', 'fail', 'needs dbt')
+    return
+  }
+
+  // Every target's database and login, as dbt resolves them. The picker in /rs-schema reuses these.
+  await update($, envs, known => all.map(e => known.find(k => envLabel(k) === envLabel(e)) ?? e))
+  const [resolved] = await Promise.all([fillDatabases($, dir, all), learnProdDatabases($, dir, prodTarget, learned)])
+  const prodDbs = [...new Set([...prodDatabases, ...learned])]
+  const isProd = (e: Resolved) => e.target === prodTarget || (e.dbname !== undefined && prodDbs.includes(e.dbname))
+  const prods = resolved.filter(isProd)
+  const failed = all.length - resolved.length
+  const unresolved = failed > 0 ? `; dbt could not resolve ${failed} target${failed > 1 ? 's' : ''}` : ''
+  if (prodDbs.length === 0 && prods.length === 0) {
+    await put('prod', 'fail', `no prod database known${unresolved}`, `Name your prod target "${prodTarget}", or set prodDatabases with /plugin configure redshift-dbt-kit@redshift-dbt-kit.`)
+  } else {
+    const detail = `${prodDbs.join(', ') || '?'} (targets ${prods.map(envLabel).join(', ')})${unresolved}`
+    const other = prods.filter(e => e.target !== prodTarget).map(envLabel)
+    if (other.length > 0) await put('prod', 'warn', detail, `${other.join(', ')} ${other.length > 1 ? 'point' : 'points'} at a prod database, so the guard treats ${other.length > 1 ? 'them' : 'it'} as prod. If that is wrong, point ${other.length > 1 ? 'them' : 'it'} at a dev database.`)
+    else await put('prod', 'ok', detail)
+  }
+
+  const devs = resolved.filter(e => !isProd(e))
+  const shared = devs.flatMap(d => prods.filter(p => p.user !== undefined && p.user === d.user).slice(0, 1).map(p => ({ d, p })))
+  if (shared.length > 0) {
+    const { p } = shared[0]!
+    await put('login', 'warn', `${shared.map(s => envLabel(s.d)).join(', ')} ${shared.length > 1 ? 'log' : 'logs'} in as ${p.user}, the same user as ${envLabel(p)}`, 'Ask for a dev login with no write rights on prod: then nothing Claude runs on dev can reach prod.')
+  } else {
+    await put('login', 'ok', 'dev logins differ from prod')
+  }
+
+  // The target the tour's "try it" prompts use: the project's dev, else its first non-prod target, else any.
+  const dev = devs.find(e => e.profile === projectProfile && e.target === 'dev') ?? devs.find(e => e.profile === projectProfile) ?? devs[0]
+  if (dev !== undefined) await update($, setup, s => ({ ...s, dev: { profile: dev.profile, target: dev.target } }))
 }
 
 // `dbt show --output json` rows in the results pane's shape; a column is numeric when its first value is.
@@ -367,6 +468,19 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'rs-results', description: 'Show the last query result as a pane' })
     await $.command.register({ name: 'rs-schema', description: 'Search Redshift columns: does this field exist?' })
     await $.command.register({ name: 'dbt-model', description: 'Show the card of the dbt model Claude last touched' })
+    await $.command.register({ name: KIT, description: 'Check your setup and take a tour of what redshift-dbt-kit does' })
+    // The first session after install: open the tour once, with the setup check running. A welcome
+    // is never worth failing the session start.
+    try {
+      if (!(await $.store.get('welcomed'))) {
+        await $.store.set('welcomed', true)
+        const { isPlaced } = await $.ui.open({ id: KIT, title: '✻ redshift-dbt-kit' })
+        $.ui.toast(isPlaced ? '✻ redshift-dbt-kit is installed: a short tour is open beside the chat.' : '✻ redshift-dbt-kit is installed. Run /kit for a short tour and a setup check.')
+        void runSetup($, prodTarget, prodDatabases, learned).catch(() => {})
+      }
+    } catch {
+      // no store or no pane here: /kit still works
+    }
     const lastEnv = (await $.store.get('env')) as Env | undefined
     if (typeof lastEnv?.profile === 'string' && typeof lastEnv.target === 'string') {
       await update($, env, () => lastEnv)
@@ -381,6 +495,74 @@ export const register: Register = (on, options) => {
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     return { sections: [...composed.sections, section] }
+  })
+
+  on('command.run', { command: KIT }, async $ => {
+    await update($, tour, () => 0)
+    await $.ui.open({ id: KIT, title: '✻ redshift-dbt-kit', focus: true })
+    await runSetup($, prodTarget, prodDatabases, learned)
+    return { text: 'Setup checked; the tour is open.' }
+  })
+
+  // The tour: page 0 is the setup check, then one page per feature, each with a "try it" prompt.
+  const ICON = { checking: '…', ok: '✓', warn: '⚠', fail: '✗' } as const
+  const TONE = { checking: 'claude', ok: 'success', warn: 'warning', fail: 'error' } as const
+  on('ui.render', { component: 'Pane', requestId: KIT }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const s = await read($, setup)
+    const pages = tourPages(prodTarget, s.dev)
+    const total = pages.length + 1
+    const at = Math.min(await read($, tour), total - 1)
+    const go = (to: number) => update($, tour, () => Math.max(0, Math.min(total - 1, to)))
+    const p = at > 0 ? pages[at - 1] : undefined
+    const busy = s.checks.some(c => c.state === 'checking')
+
+    return (
+      <Box flexDirection="column">
+        <Box borderStyle="round" borderColor="claude" paddingX={1}>
+          <Text wrap="truncate-end">
+            <Text color="claude" bold>✻ redshift-dbt-kit</Text>
+            <Text dimColor> · {at + 1}/{total} · {p ? p.title : 'Setup'}</Text>
+          </Text>
+        </Box>
+        {p === undefined ? (
+          <Box paddingX={1} flexDirection="column">
+            {s.checks.length === 0 && <Text dimColor>Press recheck to check your setup.</Text>}
+            {s.checks.map(c => (
+              <Box key={`check-${c.key}`} flexDirection="column">
+                <Text>
+                  <Text color={TONE[c.state]} bold>{ICON[c.state]} {c.label.padEnd(13)}</Text>
+                  {c.detail}
+                </Text>
+                {c.fix !== undefined && c.state !== 'ok' && <Text dimColor>{'   → '}{c.fix}</Text>}
+              </Box>
+            ))}
+            <Text dimColor>{busy ? 'dbt resolves each target: a few seconds each, the first time.' : 'Press next to see what each feature does.'}</Text>
+          </Box>
+        ) : (
+          <Box paddingX={1} flexDirection="column">
+            {p.lines.map(line => <Text>{line}</Text>)}
+            {p.tryIt && <Button key="try" hotkey="t" label={`try it: ${p.tryIt.label}`} onPress={() => $.prompt.fill({ text: p.tryIt!.prompt, mode: 'append' })} />}
+          </Box>
+        )}
+        <Box paddingX={1}>
+          <Button key="back" hotkey="b" label="back" onPress={() => go(at - 1)} />
+          <Text> </Text>
+          <Button key="next" hotkey="n" label={at === total - 1 ? 'start over' : 'next'} onPress={() => go(at === total - 1 ? 0 : at + 1)} />
+          <Text> </Text>
+          {at === 0 && (
+            <Button
+              key="recheck"
+              hotkey="r"
+              label={busy ? 'checking…' : 'recheck'}
+              onPress={() => {
+                if (!busy) void runSetup($, prodTarget, prodDatabases, learned).catch(() => {})
+              }}
+            />
+          )}
+        </Box>
+      </Box>
+    )
   })
 
   on('command.run', { command: 'dbt-board' }, async $ => {

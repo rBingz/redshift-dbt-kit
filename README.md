@@ -6,7 +6,7 @@
 claude plugin install redshift-dbt-kit --marketplace rBingz/redshift-dbt-kit --scope user
 ```
 
-Then restart Claude Code. Most teams need no settings. See [Install](#install) for other ways.
+Then restart Claude Code. On the first start, a short tour opens: it checks your setup and shows each feature, with a "try it" button for each. Run `/kit` to see it again. Most teams need no settings. See [Install](#install) for other ways.
 
 ---
 
@@ -22,6 +22,7 @@ Then restart Claude Code. Most teams need no settings. See [Install](#install) f
 | ◈ | [Model card](#model-card) | A model's lineage, tests and docs | `/dbt-model` |
 | 💬 | [Ask Claude buttons](#ask-claude-buttons) | Ready-made prompts from the panes | in the panes |
 | ⌘ | [Slash commands](#slash-commands) | Profile a table, check models on dev | `/rs-profile`, `/dbt-check` |
+| 🧭 | [Setup check and tour](#setup-check-and-tour) | Checks your setup, then walks through each feature | `/kit` |
 
 Panes open on their own when the terminal is wide enough. Otherwise, open them with the command.
 
@@ -117,8 +118,28 @@ They put a prompt in your prompt box for you to read and send. Nothing is sent o
 | --- | --- |
 | `/rs-profile <schema.table>` | Profiles a table on a dev target: row count, nulls, distincts, min/max |
 | `/dbt-check [selector]` | Compiles and tests models on dev, then summarizes failures |
+| `/kit` | The setup check and the tour |
 
-**Team conventions:** the mod also adds a short section to Claude's system prompt. It tells Claude to:
+## Setup check and tour
+
+Opens on its own the first time, and with `/kit` any time after.
+
+**Page 1 checks your setup.** Each line is ✓, ⚠ or ✗, and anything not ✓ says how to fix it:
+
+| Check | Looks at |
+| --- | --- |
+| dbt | `dbt --version` works |
+| profiles.yml | where dbt finds it, and how many profiles and targets it has |
+| dbt project | whether Claude Code started in a dbt project |
+| prod | the prod databases, and every target that points at one |
+| logins | whether a dev target logs in as the same user as prod |
+| Python | only needed when `manifest.json` is over 4 MiB |
+
+**The next pages show one feature each**, with a "try it" button that puts a ready-made prompt in your prompt box. They use the dev target the check found, and nothing touches prod: the guard's demo is an `echo`. Move with `n` (next) and `b` (back); `t` presses try it, and `r` reruns the check.
+
+## Team conventions
+
+The mod adds a short section to Claude's system prompt. It tells Claude to:
 - query through `dbt show --output json` on a dev target, without piping the output, so the results pane fills
 - pass `--target` on every dbt command
 - treat the prod databases from your settings as prod

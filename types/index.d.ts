@@ -10,6 +10,10 @@ export type Catalog = {
   columns: string[]
 }
 export type Env = { profile: string; target: string; dbname?: string }
+// One line of the /kit setup check: `fix` says what to do when it is not ok.
+export type Check = { key: string; label: string; state: 'checking' | 'ok' | 'warn' | 'fail'; detail: string; fix?: string }
+// `dev`: the target the tour's "try it" prompts use.
+export type Setup = { checks: Check[]; dev?: { profile: string; target: string } }
 export type ModelCard = {
   name: string
   error?: string
@@ -38,6 +42,8 @@ declare module 'claude-code' {
       card: ModelCard | null
       env: Env | null
       envs: Env[]
+      setup: Setup
+      tour: number
     }
   }
 }
