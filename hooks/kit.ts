@@ -1,8 +1,15 @@
 // The /kit tour: one page per feature after the setup check. No `$` here, so tests can call it directly.
+import type { Board, QueryResult } from '../types'
+
+export type Preview = 'guard' | 'status' | 'board' | 'results' | 'schema' | 'card' | 'buttons' | 'commands'
 
 export type TourPage = {
+  icon: string
   title: string
-  lines: string[]
+  tagline: string
+  bullets: string[]
+  // A miniature of the feature, drawn from the sample data below.
+  preview: Preview
   // A "try it" button: puts `prompt` in the prompt box for the person to send.
   tryIt?: { label: string; prompt: string }
 }
@@ -11,78 +18,73 @@ export function tourPages(prodTarget: string, dev?: { profile: string; target: s
   const devFlags = dev ? `--profile ${dev.profile} --target ${dev.target}` : '--target <your dev target>'
   return [
     {
+      icon: '🛡',
       title: 'Guard',
-      lines: [
-        'Checks every command Claude runs, before it runs.',
-        'On prod it blocks dbt run, build, seed, snapshot, run-operation, retry, clone and --full-refresh, and destructive SQL (DROP, TRUNCATE, DELETE without WHERE...).',
-        `Prod is the target "${prodTarget}" and every database a prod target points at: the Setup page lists them.`,
-        'Claude cannot override a block. Prod runs stay with you or your scheduler.',
+      tagline: 'Keeps Claude off prod, with nothing to set up.',
+      bullets: [
+        'Blocks dbt run, build, seed, snapshot, run-operation, retry, clone and --full-refresh on prod',
+        'Blocks destructive SQL on prod: DROP, TRUNCATE, DELETE without WHERE, GRANT…',
+        `Prod is the target "${prodTarget}" and every database a prod target points at`,
+        'Claude cannot override a block: prod runs stay with you or your scheduler',
       ],
+      preview: 'guard',
       tryIt: {
         label: 'see a block',
         prompt: `Show me the redshift-dbt-kit guard: run \`echo dbt run --target ${prodTarget}\`. It is only echo, so nothing runs even if it were allowed.`,
       },
     },
     {
+      icon: '✻',
       title: 'Status line',
-      lines: [
-        'The bottom of the screen shows the live dbt target and its database, for example:',
-        '  ✻  dbt:shop.dev (dev_alice)',
-        '  ⚠ PROD  dbt:shop.prod (analytics)',
-        'It follows the dbt project you start Claude Code in, and each dbt write Claude runs.',
-      ],
+      tagline: 'Always know which target and database you are on.',
+      bullets: ['Shown at the bottom of the screen', 'Follows the project you start Claude Code in, and each dbt write Claude runs'],
+      preview: 'status',
     },
     {
+      icon: '▦',
       title: 'dbt run board',
-      lines: [
-        'After each dbt run, build, test, seed or snapshot, a pane shows counts by status, each failure with its message, and the slowest models.',
-        'A spinner shows while dbt runs. A toast tells you when a long run ends.',
-        'Reopen it with /dbt-board.',
-      ],
+      tagline: 'Every dbt run at a glance: failures first, then the slowest models.',
+      bullets: ['After each dbt run, build, test, seed or snapshot', 'A spinner while dbt runs, and a toast when a long run ends', 'Reopen it with /dbt-board'],
+      preview: 'board',
       tryIt: { label: 'run a test', prompt: `Run \`dbt test ${devFlags}\` on one small model that has tests, and show me the run board.` },
     },
     {
+      icon: '▤',
       title: 'Query results',
-      lines: [
-        'After `dbt show --output json`, a pane shows the rows as a table you page through with p and n, with a chart per numeric column.',
-        'Claude queries this way on its own: ask it a question about your data.',
-        'Reopen it with /rs-results.',
-      ],
+      tagline: 'Rows you can page through, with a chart per numeric column.',
+      bullets: ['Fills after `dbt show --output json`: Claude queries this way on its own', 'Page with p and n; reopen it with /rs-results'],
+      preview: 'results',
       tryIt: { label: 'query a table', prompt: `Ask me which table I want to look at, then show me 20 rows of it with \`dbt show ${devFlags} --output json --limit 20\`.` },
     },
     {
+      icon: '🔍',
       title: 'Schema search',
-      lines: [
-        'Does this field exist? /rs-schema searches every column of a target as you type, e.g. "orders cust".',
-        'Exact column names get a ✓. Press a row to put schema.table.column in your prompt.',
-        'Pick any target from your profiles.yml; prod ones are marked ⚠.',
-      ],
+      tagline: 'Does this field exist? Search every column as you type.',
+      bullets: ['Exact column names get a ✓; press a row to put it in your prompt', 'Pick any target from your profiles.yml; prod ones are marked ⚠', 'Open it with /rs-schema'],
+      preview: 'schema',
       tryIt: { label: 'open schema search', prompt: '/rs-schema' },
     },
     {
+      icon: '◈',
       title: 'Model card',
-      lines: [
-        'When Claude reads or edits a model, /dbt-model shows its materialization, relation, upstream and downstream models, tests, documented columns and last run.',
-        'It reads target/manifest.json: run dbt parse to refresh it.',
-      ],
+      tagline: "A model's lineage, tests and docs, beside the code.",
+      bullets: ['Shows when Claude reads or edits a model; reopen it with /dbt-model', 'Reads target/manifest.json: run dbt parse to refresh it'],
+      preview: 'card',
       tryIt: { label: 'see a card', prompt: 'Open one of my dbt models and tell me what it does. I want to see its model card.' },
     },
     {
+      icon: '💬',
       title: 'Ask Claude buttons',
-      lines: [
-        'Panes put ready-made prompts in your prompt box. You read them and send them; nothing is sent on its own.',
-        '  fix: on each failed model or test in the run board',
-        '  explain: in the query results',
-        '  fill the gaps: on a model card missing docs or tests',
-      ],
+      tagline: 'Ready-made prompts, one press away.',
+      bullets: ['They fill your prompt box: you read and send them, nothing is sent on its own'],
+      preview: 'buttons',
     },
     {
+      icon: '⌘',
       title: 'Slash commands',
-      lines: [
-        '/rs-profile <schema.table>: row count, nulls, distincts and min/max of a table, on a dev target.',
-        '/dbt-check [selector]: compiles and tests models on dev, then summarizes failures.',
-        '/kit: this tour and the setup check, any time.',
-      ],
+      tagline: 'Common jobs in one command.',
+      bullets: ['/rs-profile <schema.table>: row count, nulls, distincts, min/max on dev', '/dbt-check [selector]: compile and test on dev, then a summary', '/kit: this tour and the setup check, any time'],
+      preview: 'commands',
       tryIt: { label: 'profile a table', prompt: '/rs-profile ' },
     },
   ]
@@ -92,3 +94,37 @@ export function tourPages(prodTarget: string, dev?: { profile: string; target: s
 export function dbtVersion(text: string): string | undefined {
   return text.match(/installed:\s*v?(\d+\.\d+\.\d+)/)?.[1] ?? text.match(/\b(\d+\.\d+\.\d+)\b/)?.[1]
 }
+
+// Made-up data the previews draw, so a new user sees each pane before running anything.
+export const SAMPLE_BOARD: Board = {
+  command: 'dbt build',
+  elapsed: 43,
+  rows: [
+    { name: 'customers', status: 'error', seconds: 1.1, message: 'relation "raw.cust" does not exist' },
+    { name: 'orders', status: 'success', seconds: 30.2, rowsAffected: 1200 },
+    { name: 'payments', status: 'success', seconds: 9.8 },
+    { name: 'not_null_orders_id', status: 'pass', seconds: 0.4 },
+  ],
+}
+
+export const SAMPLE_RESULT: QueryResult = {
+  id: 'dbt show · dev',
+  columns: [
+    { name: 'day', type: 'date' },
+    { name: 'orders', type: 'numeric' },
+    { name: 'revenue', type: 'numeric' },
+  ],
+  rows: Array.from({ length: 30 }, (_, i) => [
+    `2026-10-${String(i + 1).padStart(2, '0')}`,
+    String(Math.round(120 + i * 4 + 25 * Math.sin(i / 2))),
+    String(Math.round(2400 + i * 90 + 500 * Math.sin(i / 2))),
+  ]),
+  total: 30,
+}
+
+export const SAMPLE_COLUMNS = [
+  'mart.orders.customer_id\tinteger',
+  'mart.orders.order_id\tbigint',
+  'mart.customers.customer_id\tinteger',
+  'staging.stg_orders.customer_name\tcharacter varying',
+]

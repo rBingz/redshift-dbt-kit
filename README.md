@@ -135,7 +135,7 @@ Opens on its own the first time, and with `/kit` any time after.
 | logins | whether a dev target logs in as the same user as prod |
 | Python | only needed when `manifest.json` is over 4 MiB |
 
-**The next pages show one feature each**, with a "try it" button that puts a ready-made prompt in your prompt box. They use the dev target the check found, and nothing touches prod: the guard's demo is an `echo`. Move with `n` (next) and `b` (back); `t` presses try it, and `r` reruns the check.
+**The next pages show one feature each**, with a preview of its pane drawn from sample data, and a "try it" button that puts a ready-made prompt in your prompt box. They use the dev target the check found, and nothing touches prod: the guard's demo is an `echo`. Move with `n` (next) and `b` (back); `t` presses try it, and `r` reruns the check.
 
 ## Team conventions
 

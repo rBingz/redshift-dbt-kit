@@ -6,7 +6,7 @@ import { CATALOG_SQL, ago, modelCard, modelPath, parseDbtShow, searchCatalog } f
 import type { Manifest } from './catalog'
 import { RESOLVE_SQL, dbtCalls, destructiveSql, listProfiles, parseResolved, sqlCalls } from './guard'
 import type { DbtCall, Resolved } from './guard'
-import { dbtVersion, tourPages } from './kit'
+import { SAMPLE_BOARD, SAMPLE_COLUMNS, SAMPLE_RESULT, dbtVersion, tourPages } from './kit'
 import { SPINNER, areaCells, chip, conventions, explainPrompt, fixPrompt, heat, improvePrompt, isFailed, numericColumns, parseRunResults, parseStatementResult, smoothBar, sparkline, statusCounts, textTable } from './views'
 
 const TIMED = new Set(['run', 'build', 'test', 'seed', 'snapshot'])
@@ -194,6 +194,15 @@ async function fillDatabases($: EngineInterface, dir: string, listed: Env[]): Pr
 const CHECKS: [key: string, label: string][] = [['dbt', 'dbt'], ['profiles', 'profiles.yml'], ['project', 'dbt project'], ['prod', 'prod'], ['login', 'logins'], ['python', 'Python']]
 const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`
 async function runSetup($: EngineInterface, prodTarget: string, prodDatabases: string[], learned: Set<string>) {
+  const spinner = $.clock.every(150, () => void update($, tick, t => t + 1)) // the ✻ spinner on lines still checking
+  try {
+    await checkSetup($, prodTarget, prodDatabases, learned)
+  } finally {
+    spinner.cancel()
+  }
+}
+
+async function checkSetup($: EngineInterface, prodTarget: string, prodDatabases: string[], learned: Set<string>) {
   await update($, setup, s => ({ ...s, checks: CHECKS.map(([key, label]) => ({ key, label, state: 'checking' as const, detail: 'checking…' })) }))
   const put = (key: string, state: Check['state'], detail: string, fix?: string) =>
     update($, setup, s => ({ ...s, checks: s.checks.map(c => (c.key === key ? { ...c, state, detail, fix } : c)) }))
@@ -504,48 +513,187 @@ export const register: Register = (on, options) => {
     return { text: 'Setup checked; the tour is open.' }
   })
 
-  // The tour: page 0 is the setup check, then one page per feature, each with a "try it" prompt.
-  const ICON = { checking: '…', ok: '✓', warn: '⚠', fail: '✗' } as const
-  const TONE = { checking: 'claude', ok: 'success', warn: 'warning', fail: 'error' } as const
+  // The tour: page 1 is the setup check, then one page per feature, each with a preview drawn from
+  // sample data and a "try it" prompt.
+  const CHIP = { ok: { label: ' OK ', color: 'success' }, warn: { label: ' WARN ', color: 'warning' }, fail: { label: ' FAIL ', color: 'error' } } as const
   on('ui.render', { component: 'Pane', requestId: KIT }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    const Raster = e.surface === 'terminal' ? $.ui.resolve(e).Raster : undefined
     const s = await read($, setup)
+    const spin = SPINNER[(await read($, tick)) % SPINNER.length]
     const pages = tourPages(prodTarget, s.dev)
     const total = pages.length + 1
     const at = Math.min(await read($, tour), total - 1)
     const go = (to: number) => update($, tour, () => Math.max(0, Math.min(total - 1, to)))
     const p = at > 0 ? pages[at - 1] : undefined
     const busy = s.checks.some(c => c.state === 'checking')
+    const width = Math.max(20, e.props.bodyColumns - 8) // the preview box's inside
+
+    // Progress: done ●, here ◉, ahead ○.
+    const dots = Array.from({ length: total }, (_, i) =>
+      i === at ? <Text color="claude" bold>◉ </Text> : i < at ? <Text color="claude">● </Text> : <Text dimColor>○ </Text>,
+    )
+
+    const preview = (kind: string) => {
+      if (kind === 'guard') {
+        return [
+          <Text color="error" bold>✗ dbt run --target {prodTarget}</Text>,
+          <Text color="error">  redshift-dbt-kit: dbt run against shop.{prodTarget} (database analytics) is blocked.</Text>,
+          <Text color="success" bold>✓ dbt run --target dev</Text>,
+          <Text dimColor>  runs as usual</Text>,
+        ]
+      }
+      if (kind === 'status') {
+        return [<Text color="claude">✻  dbt:shop.dev (dev_alice)</Text>, <Text color="warning" bold>⚠ PROD  dbt:shop.prod (analytics)</Text>]
+      }
+      if (kind === 'board') {
+        const failed = SAMPLE_BOARD.rows.filter(isFailed)
+        const slowest = [...SAMPLE_BOARD.rows].filter(r => !isFailed(r)).sort((a, b) => b.seconds - a.seconds).slice(0, 3)
+        const max = slowest[0]!.seconds
+        return [
+          <Text>
+            <Text color="claude" bold>✻ {SAMPLE_BOARD.command}</Text>
+            <Text dimColor> · {SAMPLE_BOARD.elapsed}s · </Text>
+            {statusCounts(SAMPLE_BOARD.rows)}
+          </Text>,
+          ...failed.map(r => (
+            <Text color="error" wrap="truncate-end">
+              <Text inverse> fix </Text> ✗ <Text bold>{r.name}</Text> {r.message}
+            </Text>
+          )),
+          ...slowest.map(r => {
+            const c = chip(r.status)
+            return (
+              <Text wrap="truncate-end">
+                <Text backgroundColor={c.color} color="inverseText" bold>{c.label}</Text>
+                {' '.repeat(7 - c.label.length)}
+                {r.name.padEnd(20).slice(0, 20)}
+                <Text color={heat(r.seconds / max)}>{smoothBar(r.seconds, max, Math.max(1, width - 44))}</Text> {r.seconds.toFixed(1)}s
+              </Text>
+            )
+          }),
+        ]
+      }
+      if (kind === 'results') {
+        const table = textTable(SAMPLE_RESULT, SAMPLE_RESULT.rows.slice(0, 3), width)
+        const values = SAMPLE_RESULT.rows.map(r => Number(r[2]))
+        return [
+          <Text color="claude" bold>{table.header}</Text>,
+          ...table.lines.map(l => <Text>{l}</Text>),
+          <Text dimColor>…  page 1/10</Text>,
+          Raster ? (
+            <Box>
+              <Text dimColor>{'revenue'.padEnd(10)}</Text>
+              <Raster key="kit-chart" columns={Math.max(1, width - 10)} rows={2} cells={areaCells(values, Math.max(1, width - 10), 2)} />
+            </Box>
+          ) : (
+            <Text>
+              <Text dimColor>{'revenue'.padEnd(10)}</Text>
+              <Text color="claude">{sparkline(values, width - 10)}</Text>
+            </Text>
+          ),
+        ]
+      }
+      if (kind === 'schema') {
+        const { matches } = searchCatalog(SAMPLE_COLUMNS, 'orders cust', 3)
+        return [
+          <Text>
+            <Text color="claude">› </Text>orders cust<Text color="claude">▏</Text>
+          </Text>,
+          ...matches.map(m => (
+            <Text>
+              {m.isExact ? <Text color="success">✓ </Text> : '  '}
+              {m.parts.map(part => (part.isHit ? <Text color="claude" bold>{part.text}</Text> : part.text))}
+              <Text dimColor>  {m.type}</Text>
+            </Text>
+          )),
+        ]
+      }
+      if (kind === 'card') {
+        return [
+          <Text>
+            <Text color="claude" bold>✻ orders</Text>
+            <Text dimColor> · incremental · "analytics"."mart"."orders"</Text>
+          </Text>,
+          <Text>One row per order, with its payments.</Text>,
+          <Text><Text color="claude">↑ </Text>stg_orders, src:raw.payments</Text>,
+          <Text><Text color="claude">↓ </Text>2 downstream: fct_revenue, rpt_daily</Text>,
+          <Text><Text color="success">✓ </Text>3 tests: unique_orders_order_id, not_null_orders_order_id, …</Text>,
+          <Text><Text color="claude">▤ </Text>8/10 columns documented</Text>,
+        ]
+      }
+      if (kind === 'buttons') {
+        return [
+          <Text><Text inverse> fix </Text><Text dimColor>  → find why customers failed, fix it, re-run it on dev</Text></Text>,
+          <Text><Text inverse> explain </Text><Text dimColor>  → explain this result and point out anything odd</Text></Text>,
+          <Text><Text inverse> fill the gaps </Text><Text dimColor>  → add the missing description, tests and column docs</Text></Text>,
+        ]
+      }
+      return [
+        <Text color="claude" bold>/rs-profile mart.orders</Text>,
+        <Text color="claude">{'column'.padEnd(14)}{'nulls'.padEnd(9)}{'distinct'.padEnd(10)}min … max</Text>,
+        <Text>{'order_id'.padEnd(14)}{'0%'.padEnd(9)}{'1,204'.padEnd(10)}1 … 1204</Text>,
+        <Text>{'customer_id'.padEnd(14)}{'0.4%'.padEnd(9)}{'388'.padEnd(10)}3 … 991</Text>,
+      ]
+    }
+
+    const okCount = s.checks.filter(c => c.state === 'ok').length
+    const toLook = s.checks.filter(c => c.state === 'warn' || c.state === 'fail').length
 
     return (
       <Box flexDirection="column">
         <Box borderStyle="round" borderColor="claude" paddingX={1}>
           <Text wrap="truncate-end">
-            <Text color="claude" bold>✻ redshift-dbt-kit</Text>
-            <Text dimColor> · {at + 1}/{total} · {p ? p.title : 'Setup'}</Text>
+            <Text color="claude" bold>✻ redshift-dbt-kit  </Text>
+            {dots}
+            <Text dimColor> {at + 1}/{total}</Text>
           </Text>
         </Box>
         {p === undefined ? (
           <Box paddingX={1} flexDirection="column">
-            {s.checks.length === 0 && <Text dimColor>Press recheck to check your setup.</Text>}
+            <Text color="claude" bold>🧭 Setup check</Text>
+            <Text italic dimColor>
+              {busy ? `${spin} checking… dbt resolves each target, a few seconds each the first time` : s.checks.length === 0 ? 'Press r to check your setup.' : `${okCount} ok · ${toLook} to look at`}
+            </Text>
+            <Text> </Text>
             {s.checks.map(c => (
               <Box key={`check-${c.key}`} flexDirection="column">
                 <Text>
-                  <Text color={TONE[c.state]} bold>{ICON[c.state]} {c.label.padEnd(13)}</Text>
-                  {c.detail}
+                  {c.state === 'checking' ? (
+                    <Text color="claude" bold>{` ${spin}    `}</Text>
+                  ) : (
+                    <Text backgroundColor={CHIP[c.state].color} color="inverseText" bold>{CHIP[c.state].label}</Text>
+                  )}
+                  {' '.repeat(c.state === 'checking' ? 1 : 7 - CHIP[c.state].label.length)}
+                  <Text bold>{c.label.padEnd(13)}</Text>
+                  {c.state === 'checking' ? <Text dimColor>checking…</Text> : c.detail}
                 </Text>
-                {c.fix !== undefined && c.state !== 'ok' && <Text dimColor>{'   → '}{c.fix}</Text>}
+                {c.fix !== undefined && c.state !== 'ok' && c.state !== 'checking' && <Text dimColor>{'        › '}{c.fix}</Text>}
               </Box>
             ))}
-            <Text dimColor>{busy ? 'dbt resolves each target: a few seconds each, the first time.' : 'Press next to see what each feature does.'}</Text>
           </Box>
         ) : (
           <Box paddingX={1} flexDirection="column">
-            {p.lines.map(line => <Text>{line}</Text>)}
-            {p.tryIt && <Button key="try" hotkey="t" label={`try it: ${p.tryIt.label}`} onPress={() => $.prompt.fill({ text: p.tryIt!.prompt, mode: 'append' })} />}
+            <Text color="claude" bold>{p.icon} {p.title}</Text>
+            <Text italic dimColor>{p.tagline}</Text>
+            <Box borderStyle="round" borderColor="claude" borderDimColor paddingX={1} flexDirection="column">
+              <Text dimColor>preview · sample data</Text>
+              {preview(p.preview)}
+            </Box>
+            {p.bullets.map(b => (
+              <Text>
+                <Text color="claude">› </Text>
+                {b}
+              </Text>
+            ))}
+            {p.tryIt && (
+              <Box marginTop={1}>
+                <Button key="try" hotkey="t" label={`try it: ${p.tryIt.label}`} onPress={() => $.prompt.fill({ text: p.tryIt!.prompt, mode: 'append' })} />
+              </Box>
+            )}
           </Box>
         )}
-        <Box paddingX={1}>
+        <Box paddingX={1} marginTop={1}>
           <Button key="back" hotkey="b" label="back" onPress={() => go(at - 1)} />
           <Text> </Text>
           <Button key="next" hotkey="n" label={at === total - 1 ? 'start over' : 'next'} onPress={() => go(at === total - 1 ? 0 : at + 1)} />
@@ -561,6 +709,7 @@ export const register: Register = (on, options) => {
             />
           )}
         </Box>
+        <Text dimColor>{` n next · b back${p?.tryIt ? ' · t try it' : ''}${at === 0 ? ' · r recheck' : ''}`}</Text>
       </Box>
     )
   })

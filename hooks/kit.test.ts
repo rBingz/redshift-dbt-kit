@@ -80,22 +80,23 @@ describe('/kit', () => {
     engine(on)
     await $.command.run(RUN_KIT)
     const ui = await $.ui.mount({ surface: 'terminal', ...pane })
-    expect(await ui.find({ type: 'Text', text: /✓ dbt\s+dbt 1\.10\.11 on PATH/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /✓ profiles\.yml\s+C:\/home\/\.dbt\/profiles\.yml: 2 profiles, 4 targets/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /✓ dbt project\s+started in a dbt project \(profile shop\)/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /⚠ prod\s+analytics \(targets shop\.prod, billing\.dev\)/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /→ billing\.dev points at a prod database/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /⚠ logins\s+shop\.dev logs in as alice, the same user as shop\.prod/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /✓ Python\s+not needed/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /OK\s+dbt\s+dbt 1\.10\.11 on PATH/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /OK\s+profiles\.yml\s+C:\/home\/\.dbt\/profiles\.yml: 2 profiles, 4 targets/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /OK\s+dbt project\s+started in a dbt project \(profile shop\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /WARN\s+prod\s+analytics \(targets shop\.prod, billing\.dev\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /› billing\.dev points at a prod database/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /WARN\s+logins\s+shop\.dev logs in as alice, the same user as shop\.prod/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /OK\s+Python\s+not needed/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /4 ok · 2 to look at/ })).toBeDefined()
   })
 
   test('with no dbt on PATH, it says how to fix that', async ($, on) => {
     engine(on, { dbtWorks: false })
     await $.command.run(RUN_KIT)
     const ui = await $.ui.mount({ surface: 'terminal', ...pane })
-    expect(await ui.find({ type: 'Text', text: /✗ dbt\s+dbt did not start/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /→ Install dbt, or start Claude Code from a terminal where dbt works/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /✗ prod\s+needs dbt/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /FAIL\s+dbt\s+dbt did not start/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /› Install dbt, or start Claude Code from a terminal where dbt works/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /FAIL\s+prod\s+needs dbt/ })).toBeDefined()
   })
 
   test('next walks through each feature; try it fills the prompt for the person to send', async ($, on) => {
@@ -103,16 +104,40 @@ describe('/kit', () => {
     await $.command.run(RUN_KIT)
     const ui = await $.ui.mount({ surface: 'terminal', ...pane })
     await ui.press({ key: 'next' })
-    expect(await ui.find({ type: 'Text', text: /2\/9 · Guard/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /2\/9$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /🛡 Guard/ })).toBeDefined()
     await ui.press({ key: 'try' })
     expect(seen.filled).toEqual([expect.stringContaining('`echo dbt run --target prod`')])
     await ui.press({ key: 'next' })
     await ui.press({ key: 'next' })
-    expect(await ui.find({ type: 'Text', text: /4\/9 · dbt run board/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /▦ dbt run board/ })).toBeDefined()
     await ui.press({ key: 'try' })
     expect(seen.filled[1]).toContain('dbt test --profile shop --target dev')
     await ui.press({ key: 'back' })
-    expect(await ui.find({ type: 'Text', text: /3\/9 · Status line/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /✻ Status line/ })).toBeDefined()
     expect(await ui.find({ type: 'Button', key: 'try' })).toBeUndefined() // nothing to try there
+  })
+
+  test('every page draws its preview, on every surface', async ($, on) => {
+    engine(on)
+    await $.command.run(RUN_KIT)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ surface, ...pane })
+      for (let i = 0; i < 9; i++) await ui.press({ key: 'back' }) // the page is shared state: back to the start
+      expect(await ui.find({ type: 'Text', text: /1\/9$/ })).toBeDefined()
+      for (const title of ['Guard', 'Status line', 'dbt run board', 'Query results', 'Schema search', 'Model card', 'Ask Claude buttons', 'Slash commands']) {
+        await ui.press({ key: 'next' })
+        expect(await ui.find({ type: 'Text', text: new RegExp(` ${title}$`) })).toBeDefined()
+        expect(await ui.find({ type: 'Text', text: /preview · sample data/ })).toBeDefined()
+      }
+      if (surface === 'terminal') {
+        await ui.press({ key: 'back' })
+        await ui.press({ key: 'back' })
+        await ui.press({ key: 'back' })
+        await ui.press({ key: 'back' })
+        expect(await ui.find({ type: 'Raster', key: 'kit-chart' })).toBeDefined() // Query results' chart
+      }
+      await ui.unmount()
+    }
   })
 })
