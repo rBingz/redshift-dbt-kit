@@ -22,7 +22,7 @@ A Claude Code mod for teams on Redshift + dbt.
   - `fix` on each failed model or test in the dbt run board.
   - `explain` (`e`) in the query results pane.
   - "ask Claude to fill the gaps" on a model card missing a description, tests or column docs.
-- **Team conventions for Claude**: a short section at the end of Claude's system prompt. It says to query through `dbt show --output json` on a dev target, so the results pane fills, and to pass `--target`. It also names the prod databases from your settings, and tells Claude not to work around a block.
+- **Team conventions for Claude**: a short section at the end of Claude's system prompt. It says to query through `dbt show --output json` on a dev target without piping its output, so the results pane fills, and to pass `--target`. It also names the prod databases from your settings, and tells Claude not to work around a block.
 - **Toast**: fires when a `dbt run|build|test` takes longer than the threshold.
 - **Slash commands**:
   - `/rs-profile <schema.table>` profiles a table on a dev target through `dbt show`.
@@ -30,21 +30,46 @@ A Claude Code mod for teams on Redshift + dbt.
 
 ## Install
 
-Private repo: you need read access, and `gh auth login` done on your machine.
+You need:
 
-Type this at the prompt of a terminal Claude Code session:
+- Claude Code, in a terminal.
+- `dbt` on your PATH, with your `profiles.yml` in `~/.dbt`, `$DBT_PROFILES_DIR` or the project folder.
+- Python 3 as `python3`, `python` or `py`, only if your project's `target/manifest.json` is over 4 MiB (for the model card).
+
+**From GitHub.** Run this in a terminal:
 
 ```
-/plugin install redshift-dbt-guard --marketplace rBingz/redshift-dbt-guard
+claude plugin install redshift-dbt-guard --marketplace rBingz/redshift-dbt-guard --scope user
 ```
 
-Answer `y` to add the marketplace. Pick the **user** scope.
+If the repo is private, you need read access to it and `gh auth login` done first.
 
-`dbt` must be on your PATH, with your `profiles.yml` in `~/.dbt` or `$DBT_PROFILES_DIR`.
+**From a folder** (to share it privately, for example in a repo your team can already read): copy this whole folder there, then each person runs:
+
+```
+claude plugin install redshift-dbt-guard --marketplace <path to the copied folder> --scope user
+```
+
+Either way, restart Claude Code afterwards. The install says 3 settings are not set yet: that is fine, each has a working default (see Configure).
+
+## Update
+
+- **From GitHub:** `claude plugin marketplace update redshift-dbt-guard`, then restart Claude Code.
+- **From a folder:** the mod is read from the folder itself. Pull or copy the new files there, then restart Claude Code.
+
+Run `claude plugin list` to see the version you have.
+
+## Report a problem
+
+Open an issue on the repo, or tell whoever shared the mod with you. Include:
+
+- the exact command and the message the mod showed, for a wrong block or a miss
+- your OS and `dbt --version`
+- for an empty pane: the command that should have filled it
 
 ## Configure
 
-Run `/config` to change these:
+Run `/plugin configure redshift-dbt-guard@redshift-dbt-guard` in Claude Code to change these:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -68,7 +93,8 @@ When a guarded dbt write runs on a dev target that logs in as the same user as a
 - The SQL check is a regex scan, not a parser. A script that hides SQL (`bash run.sh`), a GUI client, or SQL built at run time slips past. The guard is a seatbelt, not a permission system. Keep real prod rights in database grants.
 - The guard finds a command's profile from `--profile` or the `dbt_project.yml` it runs in. When it cannot, it checks every profile with that target name, and prod wins: `dbt run --target dev` outside a project is blocked if any profile's `dev` points at a prod database.
 - The first dbt write per target waits for dbt to start and resolve the target (about 8 seconds on Windows). The answer is kept until `profiles.yml` changes; an environment variable that `profiles.yml` reads takes effect in the next session. Reads (`dbt test`, `ls`, `compile`, `show` with a SELECT) never wait.
-- Quoted text is never read as a command, but each line of a heredoc body is. A dbt write written there is checked as if it ran.
+- Quoted text is not read as a command, except `$(...)` and backticks inside double quotes, which the shell runs. Each line of a heredoc body is read as a command too, so a dbt write written there is checked as if it ran.
+- `bash -c "..."`, `powershell -Command "..."`, `make`, scripts and aliases are not read: the command inside is quoted or in another file.
 - After `popd` the guard cannot tell the folder, so it checks every profile and prod wins.
 - The schema browser keeps only the newest target's columns between sessions: the shared store holds 4 MiB.
 - The schema picker lists targets written in block-style YAML. Outputs written in flow style (`outputs: {dev: ...}`) or as an alias do not show in the picker; the guard still covers them.

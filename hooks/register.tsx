@@ -140,7 +140,7 @@ async function learnProdDatabases($: EngineInterface, dir: string, prodTarget: s
             const label = `${profile}.${prodTarget}`
             if (!warnedProd.has(label)) {
               warnedProd.add(label)
-              $.ui.toast(`⚠ redshift-dbt-guard: cannot tell which database ${label} points at (${err instanceof Error ? err.message : String(err)}), so other targets on it are not guarded. Set prodDatabases in /config.`)
+              $.ui.toast(`⚠ redshift-dbt-guard: cannot tell which database ${label} points at (${err instanceof Error ? err.message : String(err)}), so other targets on it are not guarded. Set prodDatabases with /plugin configure redshift-dbt-guard@redshift-dbt-guard.`)
             }
             return undefined
           },
@@ -351,7 +351,7 @@ export const register: Register = (on, options) => {
     const hasDbt = Object.keys(listed).length > 0
     // A profile with no listed outputs (flow style, an alias) may hold a prod target: no warning then.
     if (hasDbt && prodDatabases.length === 0 && !Object.values(listed).some(outputs => outputs.length === 0 || outputs.includes(prodTarget))) {
-      $.ui.toast(`⚠ redshift-dbt-guard: no prod database known. Set prodDatabases in /config, or name your prod target "${prodTarget}".`)
+      $.ui.toast(`⚠ redshift-dbt-guard: no prod database known. Set prodDatabases with /plugin configure redshift-dbt-guard@redshift-dbt-guard, or name your prod target "${prodTarget}".`)
     }
     // In a dbt project: the status line's target and the prod databases, once dbt has started (seconds).
     if (hasDbt) void (async () => {
