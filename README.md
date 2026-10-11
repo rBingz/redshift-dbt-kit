@@ -79,7 +79,7 @@ It reads `target/run_results.json`. A toast tells you when a run took longer tha
 
 After `dbt show --output json` (or `aws redshift-data get-statement-result`), it shows:
 - the rows as a table; page with `p` and `n`
-- a small area chart per numeric column (a sparkline outside the terminal)
+- a small area chart per numeric column, in row order (a sparkline outside the terminal). Only when the query ends in `ORDER BY`: unsorted rows have no order worth charting.
 
 It keeps the first 1,000 rows. dbt's own `--limit` keeps the query small: dbt adds it to the SQL, so Redshift sends only that many rows. The guard blocks a `--limit` over 1,000.
 
