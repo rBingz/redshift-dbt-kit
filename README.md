@@ -32,6 +32,8 @@ Panes open on their own when the terminal is wide enough. Otherwise, open them w
 
 Checks every command Claude runs in Bash or PowerShell, before it runs.
 
+![The guard page of the tour: a dbt run on prod blocked, the same run on dev allowed](docs/dbt-guard.png)
+
 **What counts as prod:** a target named `prod`, **and the database it points at.** Any other target on that database is prod too, whatever it is called, with nothing to set. Add more databases with the [`prodDatabases`](#configure) setting.
 
 | On prod, it blocks | It never blocks |
@@ -59,12 +61,9 @@ The SQL check covers `dbt show --inline`, `aws redshift-data` and `psql`: inline
 
 ## Status line
 
-Shows the live dbt target and its database:
+Shows the live dbt target and its database, with a warning on prod.
 
-```
-✻  dbt:shop.dev (dev_alice)
-⚠ PROD  dbt:shop.prod (analytics)
-```
+![The status line on a dev target and on prod](docs/status-line.png)
 
 ## dbt run board
 
@@ -72,6 +71,8 @@ Opens with a spinner while dbt runs. After each `dbt run`, `build`, `test`, `see
 - counts by status
 - failures, with their messages
 - the slowest models, with status chips and bars colored green to red by run time
+
+![The dbt run board after a dbt test run with one failure](docs/dbt-board.png)
 
 It reads `target/run_results.json`. A toast tells you when a run took longer than [`toastSeconds`](#configure).
 
@@ -81,6 +82,8 @@ After `dbt show --output json` (or `aws redshift-data get-statement-result`), it
 - the rows as a table; page with `p` and `n`
 - a small area chart per numeric column, in row order (a sparkline outside the terminal). Only when the query ends in `ORDER BY`: unsorted rows have no order worth charting.
 
+![Query results: rows of dbt show as a table, with a chart of revenue](docs/rs-results.png)
+
 It keeps the first 1,000 rows. dbt's own `--limit` keeps the query small: dbt adds it to the SQL, so Redshift sends only that many rows. The guard blocks a `--limit` over 1,000.
 
 ## Schema browser
@@ -88,6 +91,8 @@ It keeps the first 1,000 rows. dbt's own `--limit` keeps the query small: dbt ad
 1. **Pick a target:** any `profile.target` from your `profiles.yml`. Prod ones are marked ⚠.
 2. **Search as you type**, e.g. `orders cust`. Exact column names get a ✓. "No column matches" tells you a field does not exist.
 3. **Press a row** to put `schema.table.column` in your prompt.
+
+![Schema search for "orders cust", with the matches highlighted](docs/schema-search.png)
 
 Columns come from `svv_columns`, read through `dbt show` with your own dbt login. They are cached per target across sessions; press refresh to reload.
 
@@ -99,6 +104,8 @@ When Claude reads or edits `models/**/*.sql`, the card shows the model's:
 - upstream and downstream models
 - tests, documented columns and last run
 
+![The model card of an orders model: lineage, tests and docs](docs/dbt-model.png)
+
 It reads `target/manifest.json`; run `dbt parse` to refresh it.
 
 > [!NOTE]
@@ -107,6 +114,8 @@ It reads `target/manifest.json`; run `dbt parse` to refresh it.
 ## Ask Claude buttons
 
 They put a prompt in your prompt box for you to read and send. Nothing is sent on its own.
+
+![The fix, explain and fill-the-gaps buttons and what each asks](docs/ask-buttons.png)
 
 | Button | Where | Asks Claude to |
 | --- | --- | --- |
@@ -121,6 +130,8 @@ They put a prompt in your prompt box for you to read and send. Nothing is sent o
 | `/rs-profile <schema.table>` | Profiles a table on a dev target: row count, nulls, distincts, min/max |
 | `/dbt-check [selector]` | Compiles and tests models on dev, then summarizes failures |
 | `/kit` | The setup check and the tour |
+
+![A /rs-profile result: nulls, distincts and min/max per column](docs/slash-commands.png)
 
 ## Setup check and tour
 
