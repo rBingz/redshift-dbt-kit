@@ -17,7 +17,7 @@ A Claude Code mod for teams on Redshift + dbt.
   - Search every column as you type, e.g. `orders cust`. Exact column names get a ✓, and "no column matches" tells you a field does not exist.
   - Press a row to put `schema.table.column` in your prompt.
   - Columns come from `svv_columns`, read through `dbt show` with your own dbt login. They are cached per target across sessions, and reload with the refresh button.
-- **dbt model card** (pane, `/dbt-model`): when Claude reads or edits `models/**/*.sql`, it shows the model's materialization, relation, description, upstream and downstream models, tests, documented columns and last run. It reads `target/manifest.json`; run `dbt parse` to refresh it.
+- **dbt model card** (pane, `/dbt-model`): when Claude reads or edits `models/**/*.sql`, it shows the model's materialization, relation, description, upstream and downstream models, tests, documented columns and last run. It reads `target/manifest.json`; run `dbt parse` to refresh it. A manifest over 4 MiB, more than a mod can read, is read by a small Python script (`runner/model_card.py`) that hands back only that model's part; it uses `python3`, `python` or `py`, whichever works.
 - **Ask Claude buttons**: they put a prompt in your prompt box for you to read and send. Nothing is sent on its own.
   - `fix` on each failed model or test in the dbt run board.
   - `explain` (`e`) in the query results pane.
@@ -73,7 +73,7 @@ When a guarded dbt write runs on a dev target that logs in as the same user as a
 - The schema browser keeps only the newest target's columns between sessions: the shared store holds 4 MiB.
 - The schema picker lists targets written in block-style YAML. Outputs written in flow style (`outputs: {dev: ...}`) or as an alias do not show in the picker; the guard still covers them.
 - Panes open on their own only when the terminal is wide enough (about 110–144 columns); otherwise use `/dbt-board` or `/rs-results`. The results pane keeps the first 1,000 rows.
-- The model card cannot read a `manifest.json` over 4 MiB, and the schema browser refuses a catalog over 4 MiB of output.
+- The schema browser refuses a catalog over 4 MiB of output.
 
 ## Develop
 

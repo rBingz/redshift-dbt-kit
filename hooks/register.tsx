@@ -279,7 +279,30 @@ async function switchEnv($: EngineInterface, picked: Env) {
   else await loadCatalog($, picked)
 }
 
-let manifestCache:{ path: string; mtimeMs: number; doc: Manifest } | undefined
+// The manifest last read: the whole file when small, else the part one model needs (its name in the key).
+let manifestCache: { key: string; doc: Manifest } | undefined
+const MAX_READ = 4 * 1024 * 1024 // the most $.fs.read takes
+
+// A manifest over MAX_READ: runner/model_card.py reads it and prints the one model's part, in the
+// same shape. Python is there wherever dbt is, under one of these names; the one that works is kept.
+const PYTHONS = ['python3', 'python', 'py']
+let python: string | undefined
+async function manifestPart($: EngineInterface, path: string, name: string): Promise<Manifest> {
+  let said = ''
+  for (const exe of python !== undefined ? [python] : PYTHONS) {
+    try {
+      const ran = await $.process.run([exe, `${$.plugin.root}/runner/model_card.py`, path, name], { timeoutMs: 60_000 })
+      if (ran.exitCode === 0) {
+        python = exe
+        return JSON.parse(ran.stdout) as Manifest
+      }
+      said = lastLines(`${ran.stdout}\n${ran.stderr}`) || `${exe} exited ${ran.exitCode}`
+    } catch (err) {
+      said = err instanceof Error ? err.message : String(err)
+    }
+  }
+  throw new Error(`target/manifest.json is over 4 MiB, and Python could not read it for the mod (${said})`)
+}
 
 // The card for a model file Claude touched; opens the pane when it was an edit.
 async function showModel($: EngineInterface, filePath: string, isEdit: boolean) {
@@ -290,9 +313,10 @@ async function showModel($: EngineInterface, filePath: string, isEdit: boolean) 
   try {
     if (!(await $.fs.exists(path))) throw new Error('no target/manifest.json yet: run dbt parse')
     const stat = await $.fs.stat(path)
-    if (stat.size > 4 * 1024 * 1024) throw new Error('target/manifest.json is over 4 MiB, more than a mod can read')
-    if (manifestCache?.path !== path || manifestCache.mtimeMs !== stat.mtimeMs) {
-      manifestCache = { path, mtimeMs: stat.mtimeMs, doc: JSON.parse(await $.fs.read(path)) as Manifest }
+    const isBig = stat.size > MAX_READ
+    const key = `${path}|${stat.mtimeMs}${isBig ? `|${model.name}` : ''}`
+    if (manifestCache?.key !== key) {
+      manifestCache = { key, doc: isBig ? await manifestPart($, path, model.name) : (JSON.parse(await $.fs.read(path)) as Manifest) }
     }
     value = modelCard(manifestCache.doc, model.name)
   } catch (err) {

@@ -38,17 +38,22 @@ const SHOW = `12:00:00  Running with dbt=1.10.11\n${JSON.stringify({ show: COLUM
 const RUN_SCHEMA = { command: 'rs-schema', args: '', origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 100 } }
 
 // Beneath the plugin: env, clock, dbt, profiles.yml, the dbt project's files, prompt fills and plain tool answers.
-function engine(on: On, filled: string[] = [], runs: string[][] = [], dbtSays = { exitCode: 0, stdout: SHOW }) {
+// `manifestSize` over 4 MiB sends the card through runner/model_card.py, where only `py` works:
+// `python3` is a stub that says Python is missing, and `python` is not there at all.
+function engine(on: On, filled: string[] = [], runs: string[][] = [], dbtSays = { exitCode: 0, stdout: SHOW }, manifestSize = 2048) {
   mock.env(on, { USERPROFILE: 'C:/home' })
   mock.clock(on)
   mock.store(on)
   fakeDbt(on)
   on('process.run', ($, e) => {
     runs.push([...e.argv])
-    return { value: { ...OK, ...dbtSays } }
+    if (!e.argv[1]?.endsWith('/runner/model_card.py')) return { value: { ...OK, ...dbtSays } }
+    if (e.argv[0] === 'python3') return { value: { ...OK, exitCode: 9009, stdout: '', stderr: 'Python was not found' } }
+    if (e.argv[0] === 'python') return { deny: 'spawn python ENOENT' }
+    return { value: { ...OK, stdout: JSON.stringify(MANIFEST) } }
   })
   on('fs.exists', ($, e) => ({ value: e.path.replace(/\\/g, '/').startsWith(PROJECT) }))
-  on('fs.stat', () => ({ value: { kind: 'file' as const, size: 2048, mtimeMs: 1, isLink: false } }))
+  on('fs.stat', () => ({ value: { kind: 'file' as const, size: manifestSize, mtimeMs: 1, isLink: false } }))
   on('fs.read', ($, e) => {
     const path = e.path.replace(/\\/g, '/')
     if (path.endsWith('manifest.json')) return { value: JSON.stringify(MANIFEST) }
@@ -181,6 +186,18 @@ describe('model card pane', () => {
     expect(await ui.find({ type: 'Text', text: /stg_orders, src:raw.payments/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /1 downstream: fct_revenue/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /1\/2 columns documented/ })).toBeDefined()
+  })
+
+  test('a manifest over 4 MiB is read through Python, the first one that works kept', async ($, on) => {
+    const runs: string[][] = []
+    engine(on, [], runs, undefined, 5 * 1024 * 1024)
+    await $.tool.call({ tool: 'Edit', file_path: `${PROJECT}/models/marts/orders.sql`, old_string: 'a', new_string: 'b' })
+    const ui = await $.ui.mount({ surface: 'terminal', ...pane('dbt-model', '✻ dbt model') })
+    expect(await ui.find({ type: 'Text', text: /1 downstream: fct_revenue/ })).toBeDefined()
+    expect(runs.map(r => r[0])).toEqual(['python3', 'python', 'py'])
+    expect(runs[2]!.slice(2)).toEqual([`${PROJECT}/target/manifest.json`, 'orders'])
+    await $.tool.call({ tool: 'Read', file_path: `${PROJECT}/models/marts/customers.sql` })
+    expect(runs.map(r => r[0])).toEqual(['python3', 'python', 'py', 'py'])
   })
 
   test('a model missing from the manifest says what to run', async ($, on) => {
