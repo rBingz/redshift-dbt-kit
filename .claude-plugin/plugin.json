@@ -1,0 +1,29 @@
+{
+  "name": "redshift-dbt-guard",
+  "version": "0.3.0",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "rBingz"
+  },
+  "description": "Blocks destructive SQL and dbt writes against prod Redshift Serverless, shows the live target, toasts long dbt runs",
+  "userConfig": {
+    "prodDatabases": {
+      "type": "string",
+      "title": "Prod databases",
+      "description": "Comma-separated database names treated as prod, for dbt targets and for SQL sent through aws redshift-data or psql",
+      "default": ""
+    },
+    "prodDbtTarget": {
+      "type": "string",
+      "title": "Prod dbt target",
+      "description": "dbt target name treated as prod",
+      "default": "prod"
+    },
+    "toastSeconds": {
+      "type": "number",
+      "title": "Toast after (seconds)",
+      "description": "Toast when a dbt run, build or test takes at least this long",
+      "default": 60
+    }
+  }
+}

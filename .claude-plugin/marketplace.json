@@ -1,0 +1,5 @@
+{
+  "name": "redshift-dbt-guard",
+  "owner": { "name": "rBingz" },
+  "plugins": [{ "name": "redshift-dbt-guard", "source": "./" }]
+}
