@@ -760,7 +760,8 @@ export const register: Register = (on, options) => {
     if (run === null) return busy || <Text dimColor>✻ No dbt run yet. Runs of dbt run, build, test, seed and snapshot show here.</Text>
 
     const width = e.props.bodyColumns - 4 // round border + padding
-    const room = Math.max(3, (e.viewport?.rows ?? 24) - 10)
+    // The pane's own rows, less the header box, the failures box's border, Slowest, close and the spinner.
+    const room = Math.max(3, e.props.scroll.bodyRows - 8)
     const failed = run.rows.filter(isFailed)
     const slowest = [...run.rows].sort((a, b) => b.seconds - a.seconds).slice(0, Math.max(1, room - failed.length))
     const nameWidth = Math.min(40, Math.max(...slowest.map(r => r.name.length)))
@@ -817,9 +818,12 @@ export const register: Register = (on, options) => {
 
     const width = e.props.bodyColumns - 2
     // Charts follow row order, which means nothing unless the query sorted its rows.
-    const charts = result.isOrdered ? numericColumns(result).slice(0, 3) : []
     const chartRows = Raster ? 2 : 1
-    const size = Math.max(1, (e.viewport?.rows ?? 24) - 9 - charts.length * chartRows)
+    // The pane's own rows less the header box, the table header, the footer and close: 6. Charts go
+    // before the table drops under 3 rows.
+    const rows = e.props.scroll.bodyRows
+    const charts = result.isOrdered ? numericColumns(result).slice(0, Math.max(0, Math.min(3, Math.floor((rows - 9) / chartRows)))) : []
+    const size = Math.max(1, rows - 6 - charts.length * chartRows)
     const pages = Math.max(1, Math.ceil(result.rows.length / size))
     const at = Math.min(await read($, page), pages - 1)
     const table = textTable(result, result.rows.slice(at * size, (at + 1) * size), width)
@@ -928,7 +932,8 @@ export const register: Register = (on, options) => {
     // The picker has resolved every target, prod-named ones included: their databases are prod too.
     const prodDbs = new Set(known.filter(k => k.target === prodTarget && k.dbname !== undefined).map(k => k.dbname!))
     const isProdHere = (o: Env) => isProdEnv(o) || (o.dbname !== undefined && prodDbs.has(o.dbname))
-    const room = Math.max(3, (e.viewport?.rows ?? 24) - 11)
+    // The pane's own rows less the header box, target, search, status, more, refresh and close.
+    const room = Math.max(3, e.props.scroll.bodyRows - 9)
     const { total, matches } = searchCatalog(cat.columns, query, room)
     const age = cat.fetchedAt !== undefined ? ` · refreshed ${ago((await $.clock.now()) - cat.fetchedAt)}` : ''
     const source = picked ? `${envLabel(picked)}${picked.dbname ? ` (${picked.dbname})` : ''}` : (cat.source ?? 'no target')

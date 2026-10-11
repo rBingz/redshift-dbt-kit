@@ -63,6 +63,17 @@ const pane = (requestId: string, title: string) => ({
   viewport: { columns: 100, rows: 20 },
 })
 
+// Rows a drawn tree takes: a column stacks, a row takes its tallest child, a border adds 2.
+type Drawn = string | { type: string; props?: Record<string, unknown>; children?: Drawn[] }
+function rowsOf(n: Drawn): number {
+  if (typeof n === 'string') return 0
+  if (n.type === 'Raster') return Number(n.props?.rows ?? 1)
+  if (n.type === 'Text' || n.type === 'Button') return 1
+  const kids = (n.children ?? []).map(rowsOf)
+  const inner = n.props?.flexDirection === 'column' ? kids.reduce((a, b) => a + b, 0) : Math.max(0, ...kids)
+  return inner + (n.props?.borderStyle ? 2 : 0)
+}
+
 describe('view helpers', () => {
   test('parse run_results.json, skip a stale one', () => {
     const board = parseRunResults(RUN_RESULTS, 'dbt build', Date.parse('2026-10-10T11:59:00Z'))!
@@ -141,6 +152,18 @@ describe('panes', () => {
       expect(await ui.find({ type: 'Text', text: /page 2\/\d/ })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /^2026-10-01/ })).toBeUndefined()
       await ui.press({ key: 'prev' })
+      await ui.unmount()
+    }
+  })
+
+  test('the results pane fits the rows Claude Code gives it, short or tall', async ($, on) => {
+    engine(on)
+    await $.tool.call({ tool: 'Bash', command: 'dbt show --target dev --output json --inline "select day, orders from t order by day"' })
+    for (const bodyRows of [8, 12, 30]) {
+      const ui = await $.ui.mount({ surface: 'terminal', ...pane('rs-results', '✻ Query results'), props: { ...pane('rs-results', '').props, scroll: { offset: 0, bodyRows } }, viewport: { columns: 100, rows: 50 } })
+      expect(rowsOf((await ui.drawn()) as Drawn)).toBeLessThanOrEqual(bodyRows)
+      expect(await ui.find({ type: 'Text', text: /page 1\/\d/ })).toBeDefined()
+      expect(await ui.find({ type: 'Raster' })).toEqual(bodyRows >= 12 ? expect.anything() : undefined)
       await ui.unmount()
     }
   })
