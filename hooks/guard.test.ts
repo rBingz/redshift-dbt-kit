@@ -54,6 +54,17 @@ describe('pure checks', () => {
       ['grep', 'dbt run'],
       ['ls'],
     ])
+    expect(shellParts('rows=$(dbt run --target prod); echo `dbt seed`')).toEqual([['rows=$'], ['dbt', 'run', '--target', 'prod'], ['echo'], ['dbt', 'seed']])
+  })
+
+  test('subshells and flag values', () => {
+    expect(dbtCalls('rows=$(dbt run --target prod)')[0]).toMatchObject({ verb: 'run', isWrite: true, target: 'prod' })
+    expect(dbtCalls('dbt ls --resource-type seed --target prod')[0]).toMatchObject({ verb: 'ls', isWrite: false })
+    expect(dbtCalls('dbt test --select run')[0]!.isWrite).toBe(false)
+    expect(dbtCalls('dbt --debug run')[0]!.isWrite).toBe(true) // a flag with no value hides nothing
+    // A folder or target set from a subshell is unknown, never the session's own.
+    expect(dbtCalls('Set-Location (Join-Path $root shop); dbt run')[0]!.cwd).toBeUndefined()
+    expect(dbtCalls(`$env:DBT_TARGET = (Get-Content t.txt); dbt run`)[0]!.target).toBe('$')
   })
 
   test('every dbt call is found, wherever flags and chains put it', () => {
@@ -100,6 +111,9 @@ describe('pure checks', () => {
     expect(sqlCalls('psql -h host -d analytics -c "truncate t"')[0]).toMatchObject({ tool: 'psql', database: 'analytics', sql: 'truncate t' })
     expect(sqlCalls('psql postgresql://u@host:5439/analytics -f cleanup.sql')[0]).toMatchObject({ database: 'analytics', files: ['cleanup.sql'] })
     expect(sqlCalls('aws redshift-data get-statement-result --id x')).toEqual([])
+    expect(sqlCalls('cd sql && psql -d analytics < cleanup.sql')[0]!.files).toEqual(['sql/cleanup.sql'])
+    expect(sqlCalls('psql -d analytics <cleanup.sql')[0]!.files).toEqual(['cleanup.sql'])
+    expect(sqlCalls('psql -d analytics <<EOF')[0]!.files).toEqual([])
   })
 
   test('profiles.yml names: anchors, merges, Jinja and quoting do not get in the way', () => {
@@ -123,6 +137,7 @@ describe('guard on SQL sent straight to Redshift', () => {
     expect(await denied($, `${AWS} --database analytics --sql file://cleanup.sql`)).toContain('DROP')
     expect(await denied($, `${AWS} --database analytics --sql file://missing.sql`)).toContain('guard failed')
     expect(await denied($, 'psql -d analytics -c "delete from mart.orders"')).toContain('psql on prod database analytics')
+    expect(await denied($, 'psql -d analytics < cleanup.sql')).toContain('DROP through psql on prod database analytics')
     expect(await denied($, `${AWS} --sql "truncate x"`)).toContain('with no database named')
   })
 
@@ -191,14 +206,31 @@ describe('guard on dbt', () => {
     expect(await denied($, 'cd shop && dbt test --target prod')).toBeUndefined()
     expect(await denied($, 'cd shop && dbt show --target prod --inline "select * from mart.orders"')).toBeUndefined()
     expect(calls).toHaveLength(0)
-    await bash($, 'cd shop && dbt run') // the dev target, and shop.prod to learn the prod database
+    // Two at once share one dbt per target: the dev target, and shop.prod to learn the prod database.
+    await Promise.all([bash($, 'cd shop && dbt run'), bash($, 'cd shop && dbt run')])
     await bash($, 'cd shop && dbt build')
     expect(calls).toHaveLength(2)
-    expect(calls[0]).toEqual(expect.arrayContaining(['compile', '--profile', 'shop', '--no-introspect']))
-    expect(calls[1]).toEqual(expect.arrayContaining(['--profile', 'shop', '--target', 'prod']))
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.arrayContaining(['compile', '--profile', 'shop', '--no-introspect']),
+      expect.arrayContaining(['--profile', 'shop', '--target', 'prod']),
+    ]))
+    expect(calls.filter(c => c.includes('--target'))).toHaveLength(1)
     mtime.value = 2 // profiles.yml edited: ask dbt again
     await bash($, 'cd shop && dbt run')
     expect(calls).toHaveLength(4)
+  })
+
+  test('a prod target dbt cannot resolve here is said once, not skipped quietly', async ($, on) => {
+    const toasts: string[] = []
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    // billing.prod is in profiles.yml, but the fake dbt cannot resolve it, as with a CI-only password.
+    engine(on, { profiles: 'billing:\n  outputs:\n    dev:\n      dbname: analytics\n    prod:\n      dbname: analytics\n  target: dev\n' })
+    expect(await denied($, 'cd billing && dbt run')).toBeUndefined()
+    expect(await denied($, 'cd billing && dbt build')).toBeUndefined()
+    expect(toasts).toEqual([expect.stringContaining("cannot tell which database billing.prod points at (Runtime Error The profile 'billing' does not have a target named 'prod'.)")])
   })
 
   test('full refreshes and destructive dbt show on prod are blocked', async ($, on) => {

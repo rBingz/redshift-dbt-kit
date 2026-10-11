@@ -16,9 +16,10 @@ export function destructiveSql(sql: string): string | undefined {
   }
 }
 
-// Words of one shell command, in parts between &&, ||, ;, | and newlines, quotes kept together
-// and removed. Works for bash and PowerShell alike, which share these separators.
-// shortcut: no expansion of variables, subshells or heredoc bodies (a heredoc's lines read as
+// Words of one shell command, in parts between &&, ||, ;, |, newlines, parentheses and backticks,
+// quotes kept together and removed. Works for bash and PowerShell alike, which share these separators,
+// and a subshell such as `$(dbt run)` is read as a part of its own.
+// shortcut: no expansion of variables or heredoc bodies (a heredoc's lines read as
 // commands, which can only block more, never less).
 export function shellParts(cmd: string): string[][] {
   const parts: string[][] = []
@@ -42,7 +43,7 @@ export function shellParts(cmd: string): string[][] {
     } else if (c === '"' || c === "'") {
       quote = c
       word = word ?? ''
-    } else if (c === ';' || c === '\n' || c === '|' || (c === '&' && cmd[i + 1] === '&')) {
+    } else if (';\n|()`'.includes(c) || (c === '&' && cmd[i + 1] === '&')) {
       if (c === '&' || (c === '|' && cmd[i + 1] === '|')) i++
       endPart()
     } else if (/\s/.test(c)) {
@@ -57,6 +58,8 @@ export function shellParts(cmd: string): string[][] {
 
 export const DBT_WRITES = new Set(['run', 'build', 'seed', 'snapshot', 'run-operation', 'retry', 'clone'])
 const DBT_COMMANDS = new Set([...DBT_WRITES, 'clean', 'compile', 'debug', 'deps', 'docs', 'init', 'list', 'ls', 'parse', 'show', 'source', 'test'])
+// Flags whose value can be a command's name (`--resource-type seed`, `--select run`): that value is no command.
+const VALUE_FLAGS = new Set(['-s', '--select', '--exclude', '-m', '--models', '--selector', '--resource-type', '--resource-types', '--exclude-resource-type', '--exclude-resource-types'])
 const DBT_ENV = ['DBT_TARGET', 'DBT_PROFILE', 'DBT_PROFILES_DIR', 'DBT_PROJECT_DIR', 'DBT_FULL_REFRESH'] as const
 export const isTruthy = (v: string | undefined) => v !== undefined && /^(1|true|yes|y|on)$/i.test(v.trim())
 
@@ -94,10 +97,12 @@ function step(shell: Shell, words: string[]): { words: string[]; env: Record<str
     // $env:X = 'v', $env:X='v' or $env:X= 'v'
     const joined = rest.join(' ')
     const m = joined.match(/^\$env:(\w+)\s*=\s*(.*)$/i)
-    if (m) shell.env[m[1]!.toUpperCase()] = m[2]!.trim()
+    // An empty value was set from a subshell, `$env:X = (...)`: keep `$`, a name no target has, as bash's `X=$(...)` does.
+    if (m) shell.env[m[1]!.toUpperCase()] = m[2]!.trim() || '$'
   } else if (head && ['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location'].includes(head)) {
+    // No path we can read (bare `cd`, or `Set-Location (Join-Path ...)`): the folder is unknown.
     const to = rest.slice(1).find(w => !w.startsWith('-'))
-    if (to !== undefined) shell.cwd = shell.cwd === undefined ? undefined : joinPath(shell.cwd, to)
+    shell.cwd = to === undefined || shell.cwd === undefined ? undefined : joinPath(shell.cwd, to)
   } else if (head === 'popd' || head === 'pop-location') {
     shell.cwd = undefined
   }
@@ -123,13 +128,13 @@ export function dbtCalls(cmd: string): DbtCall[] {
       }
     }
     const fromEnv = Object.fromEntries(DBT_ENV.map(k => [k, env[k]]))
-    const known = after.filter(w => DBT_COMMANDS.has(w))
+    const known = after.filter((w, i) => DBT_COMMANDS.has(w) && !VALUE_FLAGS.has(after[i - 1] ?? ''))
     const profilesDir = flag('--profiles-dir') ?? fromEnv.DBT_PROFILES_DIR
     const projectDir = flag('--project-dir') ?? fromEnv.DBT_PROJECT_DIR
     calls.push({
       verb: known.find(w => DBT_WRITES.has(w)) ?? known.find(w => w !== 'debug') ?? known[0] ?? '',
-      isWrite: after.some(w => DBT_WRITES.has(w)),
-      hasShow: after.includes('show'),
+      isWrite: known.some(w => DBT_WRITES.has(w)),
+      hasShow: known.includes('show'),
       target: flag('--target', '-t') ?? fromEnv.DBT_TARGET,
       profile: flag('--profile') ?? fromEnv.DBT_PROFILE,
       profilesDir: profilesDir && joinPath(shell.cwd, profilesDir),
@@ -164,7 +169,9 @@ export function sqlCalls(cmd: string): SqlCall[] {
     } else if (words.some(w => isProgram(w, 'psql'))) {
       const conn = words.find(w => /^postgres(ql)?:\/\//.test(w) || /\bdbname=/.test(w))
       const fromConn = conn?.match(/dbname=([\w-]+)/)?.[1] ?? conn?.match(/^postgres(?:ql)?:\/\/[^/]*\/([\w-]+)/)?.[1]
-      calls.push({ tool: 'psql', database: values('-d', '--dbname')[0] ?? fromConn, sql: values('-c', '--command').join(';'), files: values('-f', '--file').map(file) })
+      // Files from -f, and from stdin: `< x.sql` or `<x.sql` (not a `<<` heredoc).
+      const redirected = [...values('<'), ...words.filter(w => /^<[^<]/.test(w)).map(w => w.slice(1))]
+      calls.push({ tool: 'psql', database: values('-d', '--dbname')[0] ?? fromConn, sql: values('-c', '--command').join(';'), files: [...values('-f', '--file'), ...redirected].map(file) })
     }
   }
   return calls

@@ -4,10 +4,10 @@ A Claude Code mod for teams on Redshift + dbt.
 
 - **Guard**: checks every command Claude runs in Bash or PowerShell. Prod is a target named `prod` **and the database it points at**: any other target that points at that database is prod too, with nothing to set. `prodDatabases` adds more.
   - dbt itself resolves the target, so any `profiles.yml` dbt accepts works: Jinja, `env_var()`, YAML anchors and merges, and every place dbt looks for the file. If dbt cannot resolve the target, writes are blocked with dbt's error.
-  - It reads the whole command: chained calls (`&&`, `;`, `|`, new lines), flags before the dbt command, `cd` and `Set-Location`, and `DBT_TARGET`, `DBT_PROFILE`, `DBT_PROFILES_DIR`, `DBT_PROJECT_DIR` and `DBT_FULL_REFRESH`, whether set inline, with `export`, or with `$env:`.
+  - It reads the whole command: chained calls (`&&`, `;`, `|`, new lines), subshells (`$(...)`, backticks, parentheses), flags before the dbt command, `cd` and `Set-Location`, and `DBT_TARGET`, `DBT_PROFILE`, `DBT_PROFILES_DIR`, `DBT_PROJECT_DIR` and `DBT_FULL_REFRESH`, whether set inline, with `export`, or with `$env:`.
   - On prod it blocks:
     - `dbt run|build|seed|snapshot|run-operation|retry|clone` and `--full-refresh`.
-    - `DROP`, `TRUNCATE`, `DELETE`/`UPDATE` without `WHERE`, `ALTER TABLE ... DROP` and `GRANT`/`REVOKE`, whether in `dbt show --inline`, or sent through `aws redshift-data` or `psql` to a prod database (inline or in SQL files). That SQL with no database named is blocked too.
+    - `DROP`, `TRUNCATE`, `DELETE`/`UPDATE` without `WHERE`, `ALTER TABLE ... DROP` and `GRANT`/`REVOKE`, whether in `dbt show --inline`, or sent through `aws redshift-data` or `psql` to a prod database (inline, in SQL files, or sent to psql with `<`). That SQL with no database named is blocked too.
   - It does not block `dbt compile|test|ls|docs|show` with read-only SQL.
 - **Status line**: shows the live dbt target and its database, for example `✻  dbt:shop.dev (dev_alice)`, or `⚠ PROD  dbt:shop.prod (analytics)`.
 - **dbt run board** (pane): opens with a Claude-style spinner while dbt runs. After each `dbt run`, `build`, `test`, `seed` or `snapshot`, it shows counts by status, failures with their messages, and the slowest models with status chips and bars colored green to red by run time. It reads `target/run_results.json`. Reopen it with `/dbt-board`.
@@ -52,7 +52,7 @@ Run `/config` to change these:
 | `prodDbtTarget` | `prod` | dbt target name also treated as prod |
 | `toastSeconds` | `60` | Toast when a dbt run takes at least this long |
 
-Most teams need no settings: the guard asks dbt where each profile's `prod` target points, and treats that database as prod. If no profile has a target named `prod` (or `prodDbtTarget`) and `prodDatabases` is empty, the mod shows a warning at session start, because then it knows no prod database.
+Most teams need no settings: the guard asks dbt where each profile's `prod` target points, and treats that database as prod. If no profile has a target named `prod` (or `prodDbtTarget`) and `prodDatabases` is empty, the mod shows a warning at session start, because then it knows no prod database. If dbt cannot resolve a `prod` target on your machine (for example, its password is an `env_var` only CI sets), the mod says so once and names the target: set `prodDatabases` then.
 
 ## Limits
 

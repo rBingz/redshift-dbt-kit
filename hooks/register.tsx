@@ -52,13 +52,22 @@ async function projectDir($: EngineInterface, call: DbtCall): Promise<string | u
 
 // dbt's own answer to "which target and database would this be?": it renders profiles.yml with
 // its Jinja, env vars, anchors and merges, prints RESOLVE_SQL's line, and is stopped before it connects.
-// Cached for the session while profiles.yml is unchanged: dbt takes seconds to start.
-const resolvedCache = new Map<string, Resolved>()
+// Cached for the session while profiles.yml is unchanged: dbt takes seconds to start. The cache holds
+// the pending answer, so callers asking at once (session start, the picker, a guarded call) share one dbt.
+const resolvedCache = new Map<string, Promise<Resolved>>()
 async function resolveTarget($: EngineInterface, dir: string, profile: string, target?: string): Promise<Resolved> {
   const changed = await $.fs.stat(`${dir}/profiles.yml`).then(s => s.mtimeMs, () => 0)
   const key = `${dir}|${changed}|${profile}|${target ?? ''}`
-  const hit = resolvedCache.get(key)
-  if (hit) return hit
+  let pending = resolvedCache.get(key)
+  if (pending === undefined) {
+    pending = askDbt($, dir, profile, target)
+    resolvedCache.set(key, pending)
+    pending.catch(() => resolvedCache.delete(key)) // a failure is asked again next time
+  }
+  return pending
+}
+
+async function askDbt($: EngineInterface, dir: string, profile: string, target?: string): Promise<Resolved> {
   const temp = await tempDir($)
   const argv = ['dbt', '--quiet', 'compile', '--project-dir', `${$.plugin.root}/runner`, '--profiles-dir', dir, '--profile', profile,
     ...(target ? ['--target', target] : []), '--no-introspect', '--target-path', temp, '--log-path', temp, '--inline', RESOLVE_SQL]
@@ -66,10 +75,7 @@ async function resolveTarget($: EngineInterface, dir: string, profile: string, t
   for await (const { text } of $.process.spawn({ argv })) {
     said += text
     const found = parseResolved(said)
-    if (found) {
-      resolvedCache.set(key, found)
-      return found // leaving the loop stops dbt before it connects
-    }
+    if (found) return found // leaving the loop stops dbt before it connects
   }
   throw new Error(lastLines(said) || 'dbt printed no target')
 }
@@ -108,21 +114,33 @@ async function dbtTargets($: EngineInterface, dbt: DbtCall): Promise<{ envs: Env
   }
 }
 
-// The databases the targets named `prodTarget` point at, as dbt resolves them. They are prod
-// whatever other target reaches them, so a dev-named target writing to one is caught with no setting.
-async function prodTargetDatabases($: EngineInterface, dir: string, prodTarget: string): Promise<string[]> {
+// Add the databases the targets named `prodTarget` point at, as dbt resolves them, to `learned`. They
+// are prod whatever other target reaches them, so a dev-named target writing to one is caught with no
+// setting. A prod target dbt cannot resolve here (say its password is an env_var only CI sets) would
+// leave its database unguarded, so that is said once rather than guarded less quietly.
+const warnedProd = new Set<string>()
+async function learnProdDatabases($: EngineInterface, dir: string, prodTarget: string, learned: Set<string>) {
   let listed: Record<string, string[]>
   try {
     listed = listProfiles(await $.fs.read(`${dir}/profiles.yml`))
   } catch {
-    return []
+    return
   }
-  const found = await Promise.all(
+  await Promise.all(
     Object.entries(listed)
       .filter(([, outputs]) => outputs.includes(prodTarget))
-      .map(([profile]) => resolveTarget($, dir, profile, prodTarget).then(r => r.dbname, () => undefined)),
+      .map(([profile]) =>
+        resolveTarget($, dir, profile, prodTarget).then(
+          r => void (r.dbname !== undefined && learned.add(r.dbname)),
+          (err: unknown) => {
+            const label = `${profile}.${prodTarget}`
+            if (warnedProd.has(label)) return
+            warnedProd.add(label)
+            $.ui.toast(`⚠ redshift-dbt-guard: cannot tell which database ${label} points at (${err instanceof Error ? err.message : String(err)}), so other targets on it are not guarded. Set prodDatabases in /config.`)
+          },
+        ),
+      ),
   )
-  return found.filter((db): db is string => db !== undefined)
 }
 
 // Fill in each listed target's database for the picker, as dbt resolves it: three dbt processes
@@ -296,7 +314,7 @@ export const register: Register = (on, options) => {
       if (!/^profile:/m.test(project)) return
       const found = await dbtTargets($, HERE)
       if (!('envs' in found)) return
-      for (const db of await prodTargetDatabases($, found.dir, prodTarget)) learned.add(db)
+      await learnProdDatabases($, found.dir, prodTarget, learned)
       if (found.envs.length === 1) shown.dbt = found.envs[0]
       $.ui.status(statusText())
     })().catch(() => {})
@@ -622,6 +640,7 @@ export const register: Register = (on, options) => {
 
   // After a Read, Edit or Write of a dbt model, refresh its card. Matched per tool so these
   // pass-through hooks never wrap Bash, where a pass-through .catch would undo the guard's deny.
+  // Three copies: the tool matcher takes one literal name, so a loop over the names does not type-check.
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     const ran = await next(e)
     if (ran.deny === undefined) await showModel($, e.file_path, false).catch(() => {})
@@ -655,7 +674,7 @@ export const register: Register = (on, options) => {
       if (call.database === undefined) return deny(`${bad} through ${call.tool} with no database named is blocked.`)
       if (!isProdDb(call.database)) {
         const dir = await profilesDir($, HERE)
-        if (dir !== undefined) for (const db of await prodTargetDatabases($, dir, prodTarget)) learned.add(db)
+        if (dir !== undefined) await learnProdDatabases($, dir, prodTarget, learned)
       }
       if (isProdDb(call.database)) return deny(`${bad} through ${call.tool} on prod database ${call.database} is blocked.`)
     }
@@ -669,10 +688,11 @@ export const register: Register = (on, options) => {
       const showSql = dbt.hasShow ? destructiveSql(dbt.inlineSql ?? '') : undefined
       const fullRefresh = dbt.fullRefresh || fullRefreshEnv
       if (!dbt.isWrite && !fullRefresh && showSql === undefined) continue
-      const found = await dbtTargets($, dbt)
+      // The command's targets and the prod targets' databases, asked of dbt at once: each takes seconds.
+      const dir = await profilesDir($, dbt)
+      const [found] = await Promise.all([dbtTargets($, dbt), dir !== undefined && learnProdDatabases($, dir, prodTarget, learned)])
       // Fail closed: what cannot be told apart from prod is treated as prod.
       if ('error' in found) return { deny: `${$.plugin.name}: cannot tell which database this dbt command would use (${found.error}). Pass --profile and --target, or fix profiles.yml.` }
-      for (const db of await prodTargetDatabases($, found.dir, prodTarget)) learned.add(db)
       resolved = found.envs
       const prod = found.envs.find(isProdEnv)
       const where = prod && `${envLabel(prod)}${prod.dbname ? ` (database ${prod.dbname})` : ''}`
