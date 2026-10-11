@@ -65,6 +65,12 @@ describe('pure checks', () => {
     // A folder or target set from a subshell is unknown, never the session's own.
     expect(dbtCalls('Set-Location (Join-Path $root shop); dbt run')[0]!.cwd).toBeUndefined()
     expect(dbtCalls(`$env:DBT_TARGET = (Get-Content t.txt); dbt run`)[0]!.target).toBe('$')
+    expect(dbtCalls('DBT_TARGET=$(cat .target) dbt run')[0]!.target).toBe('$')
+    // Inside double quotes a substitution still runs; inside single quotes it is text.
+    expect(dbtCalls('cd shop && out="$(dbt run --target prod)"')[0]).toMatchObject({ isWrite: true, target: 'prod', cwd: 'shop' })
+    expect(dbtCalls('echo "rows: `dbt seed --target prod`"')[0]).toMatchObject({ isWrite: true, target: 'prod' })
+    expect(dbtCalls('DBT_TARGET="$(cat .target)" dbt run')[0]!.target).toBe('$')
+    expect(dbtCalls(`echo '$(dbt run --target prod)'`)).toEqual([])
   })
 
   test('every dbt call is found, wherever flags and chains put it', () => {
@@ -113,6 +119,7 @@ describe('pure checks', () => {
     expect(sqlCalls('aws redshift-data get-statement-result --id x')).toEqual([])
     expect(sqlCalls('cd sql && psql -d analytics < cleanup.sql')[0]!.files).toEqual(['sql/cleanup.sql'])
     expect(sqlCalls('psql -d analytics <cleanup.sql')[0]!.files).toEqual(['cleanup.sql'])
+    expect(sqlCalls('psql -d analytics<cleanup.sql')[0]).toMatchObject({ database: 'analytics', files: ['cleanup.sql'] })
     expect(sqlCalls('psql -d analytics <<EOF')[0]!.files).toEqual([])
   })
 
@@ -138,6 +145,8 @@ describe('guard on SQL sent straight to Redshift', () => {
     expect(await denied($, `${AWS} --database analytics --sql file://missing.sql`)).toContain('guard failed')
     expect(await denied($, 'psql -d analytics -c "delete from mart.orders"')).toContain('psql on prod database analytics')
     expect(await denied($, 'psql -d analytics < cleanup.sql')).toContain('DROP through psql on prod database analytics')
+    expect(await denied($, 'cd shop && out="$(dbt run --target prod)"')).toContain('dbt run against shop.prod')
+    expect(await denied($, 'cd shop && DBT_TARGET=$(cat .target) dbt run')).toContain("does not have a target named '$'")
     expect(await denied($, `${AWS} --sql "truncate x"`)).toContain('with no database named')
   })
 
@@ -273,6 +282,20 @@ describe('guard on dbt', () => {
     await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
     expect(toasts).toEqual([expect.stringContaining('no prod database known. Set prodDatabases in /config')])
     expect(await denied($, 'cd billing && dbt run')).toBeUndefined()
+  })
+
+  test('outputs the picker cannot list (flow style) may hold a prod target: no warning', async ($, on) => {
+    const toasts: string[] = []
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    mock.store(on)
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => ({ value: { command: e.name } }))
+    engine(on, { profiles: 'shop:\n  outputs: {dev: {dbname: dev_alice}, prod: {dbname: analytics}}\n  target: dev\n' })
+    await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+    expect(toasts).toEqual([])
   })
 
   test('other tools pass untouched', async ($, on) => {

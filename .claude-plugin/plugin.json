@@ -1,11 +1,11 @@
 {
   "name": "redshift-dbt-guard",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "types": "./types/index.d.ts",
   "author": {
     "name": "rBingz"
   },
-  "description": "Blocks destructive SQL and dbt writes against prod Redshift Serverless, shows the live target, toasts long dbt runs",
+  "description": "Guards prod Redshift from Claude's dbt and SQL commands; panes for dbt runs, query results, schema search and model cards",
   "userConfig": {
     "prodDatabases": {
       "type": "string",

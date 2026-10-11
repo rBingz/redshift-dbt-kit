@@ -1,5 +1,6 @@
 {
   "name": "redshift-dbt-guard",
   "owner": { "name": "rBingz" },
+  "metadata": { "description": "Guards prod Redshift from Claude's dbt and SQL commands; panes for dbt runs, query results, schema search and model cards" },
   "plugins": [{ "name": "redshift-dbt-guard", "source": "./" }]
 }

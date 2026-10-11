@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Board, Catalog, Env, ModelCard, QueryResult, Running } from '../types'
 import { CATALOG_SQL, ago, modelCard, modelPath, parseDbtShow, searchCatalog } from './catalog'
 import type { Manifest } from './catalog'
-import { RESOLVE_SQL, dbtCalls, destructiveSql, isTruthy, listProfiles, parseResolved, sqlCalls } from './guard'
+import { RESOLVE_SQL, dbtCalls, destructiveSql, listProfiles, parseResolved, sqlCalls } from './guard'
 import type { DbtCall, Resolved } from './guard'
 import { SPINNER, areaCells, chip, conventions, explainPrompt, fixPrompt, heat, improvePrompt, isFailed, numericColumns, parseRunResults, parseStatementResult, smoothBar, sparkline, statusCounts, textTable } from './views'
 
@@ -286,7 +286,7 @@ export const register: Register = (on, options) => {
   const list = (v: unknown) => String(v ?? '').split(',').map(s => s.trim()).filter(Boolean)
   const prodDatabases = list(options.prodDatabases)
   const prodTarget = String(options.prodDbtTarget ?? 'prod')
-  const toastSeconds = Number(options.toastSeconds ?? 60)
+  const toastSeconds = Number.isFinite(Number(options.toastSeconds)) ? Number(options.toastSeconds) : 60
   // Prod databases learned from the targets named prodTarget, beside the configured ones.
   const learned = new Set<string>()
   const isProdDb = (db: string) => prodDatabases.includes(db) || learned.has(db)
@@ -305,7 +305,8 @@ export const register: Register = (on, options) => {
       .then(async dir => (dir === undefined ? {} : listProfiles(await $.fs.read(`${dir}/profiles.yml`))))
       .catch((): Record<string, string[]> => ({}))
     const hasDbt = Object.keys(listed).length > 0
-    if (hasDbt && prodDatabases.length === 0 && !Object.values(listed).some(outputs => outputs.includes(prodTarget))) {
+    // A profile with no listed outputs (flow style, an alias) may hold a prod target: no warning then.
+    if (hasDbt && prodDatabases.length === 0 && !Object.values(listed).some(outputs => outputs.length === 0 || outputs.includes(prodTarget))) {
       $.ui.toast(`⚠ redshift-dbt-guard: no prod database known. Set prodDatabases in /config, or name your prod target "${prodTarget}".`)
     }
     // In a dbt project: the status line's target and the prod databases, once dbt has started (seconds).
@@ -681,13 +682,12 @@ export const register: Register = (on, options) => {
 
     // dbt: prod is the database dbt itself resolves for the target (or a target named prodDbtTarget).
     // Asked only for calls that could write: dbt takes seconds to start.
+    // A session-wide DBT_FULL_REFRESH is not read: it changes only writes, which are checked anyway.
     const calls = dbtCalls(cmd)
-    const fullRefreshEnv = isTruthy(await $.env.get('DBT_FULL_REFRESH'))
     let resolved: Env[] = []
     for (const dbt of calls) {
       const showSql = dbt.hasShow ? destructiveSql(dbt.inlineSql ?? '') : undefined
-      const fullRefresh = dbt.fullRefresh || fullRefreshEnv
-      if (!dbt.isWrite && !fullRefresh && showSql === undefined) continue
+      if (!dbt.isWrite && !dbt.fullRefresh && showSql === undefined) continue
       // The command's targets and the prod targets' databases, asked of dbt at once: each takes seconds.
       const dir = await profilesDir($, dbt)
       const [found] = await Promise.all([dbtTargets($, dbt), dir !== undefined && learnProdDatabases($, dir, prodTarget, learned)])
@@ -697,7 +697,7 @@ export const register: Register = (on, options) => {
       const prod = found.envs.find(isProdEnv)
       const where = prod && `${envLabel(prod)}${prod.dbname ? ` (database ${prod.dbname})` : ''}`
       if (where && dbt.isWrite) return deny(`dbt ${dbt.verb} against ${where} is blocked.`)
-      if (where && fullRefresh) return deny(`--full-refresh against ${where} is blocked.`)
+      if (where && dbt.fullRefresh) return deny(`--full-refresh against ${where} is blocked.`)
       if (where && showSql) return deny(`${showSql} through dbt show on ${where} is blocked.`)
     }
     if (resolved.length === 1) {

@@ -39,7 +39,14 @@ export function shellParts(cmd: string): string[][] {
     const c = cmd[i]!
     if (quote) {
       if (c === quote) quote = undefined
-      else word = (word ?? '') + c
+      else if (quote === '"' && ((c === '$' && cmd[i + 1] === '(') || c === '`')) {
+        // "$(...)" and "`...`" still run their command: read it as parts of its own, before this one.
+        const end = c === '`' ? cmd.indexOf('`', i + 1) : closingParen(cmd, i + 1)
+        const stop = end < 0 ? cmd.length : end
+        parts.push(...shellParts(cmd.slice(c === '`' ? i + 1 : i + 2, stop)))
+        word = (word ?? '') + '$' // its output is unknown: `$`, a name no target has
+        i = stop
+      } else word = (word ?? '') + c
     } else if (c === '"' || c === "'") {
       quote = c
       word = word ?? ''
@@ -48,6 +55,9 @@ export function shellParts(cmd: string): string[][] {
       endPart()
     } else if (/\s/.test(c)) {
       endWord()
+    } else if (c === '<' && cmd[i - 1] !== '<') {
+      endWord() // `-d db<file.sql`: the redirect starts a word of its own
+      word = c
     } else {
       word = (word ?? '') + c
     }
@@ -56,12 +66,22 @@ export function shellParts(cmd: string): string[][] {
   return parts
 }
 
+// Index of the `)` that closes the `(` at `open`; -1 when none does.
+function closingParen(s: string, open: number): number {
+  let depth = 0
+  for (let j = open; j < s.length; j++) {
+    if (s[j] === '(') depth++
+    else if (s[j] === ')' && --depth === 0) return j
+  }
+  return -1
+}
+
 export const DBT_WRITES = new Set(['run', 'build', 'seed', 'snapshot', 'run-operation', 'retry', 'clone'])
 const DBT_COMMANDS = new Set([...DBT_WRITES, 'clean', 'compile', 'debug', 'deps', 'docs', 'init', 'list', 'ls', 'parse', 'show', 'source', 'test'])
 // Flags whose value can be a command's name (`--resource-type seed`, `--select run`): that value is no command.
 const VALUE_FLAGS = new Set(['-s', '--select', '--exclude', '-m', '--models', '--selector', '--resource-type', '--resource-types', '--exclude-resource-type', '--exclude-resource-types'])
 const DBT_ENV = ['DBT_TARGET', 'DBT_PROFILE', 'DBT_PROFILES_DIR', 'DBT_PROJECT_DIR', 'DBT_FULL_REFRESH'] as const
-export const isTruthy = (v: string | undefined) => v !== undefined && /^(1|true|yes|y|on)$/i.test(v.trim())
+const isTruthy = (v: string | undefined) => v !== undefined && /^(1|true|yes|y|on)$/i.test(v.trim())
 
 export type DbtCall = {
   verb: string // its dbt command, for the panes; '' when none is named
@@ -105,6 +125,9 @@ function step(shell: Shell, words: string[]): { words: string[]; env: Record<str
     shell.cwd = to === undefined || shell.cwd === undefined ? undefined : joinPath(shell.cwd, to)
   } else if (head === 'popd' || head === 'pop-location') {
     shell.cwd = undefined
+  } else if (head === undefined) {
+    // Only assignments: `X=$(...) cmd` splits at the `(`, so keep them for the parts after.
+    Object.assign(shell.env, env)
   }
   return { words: rest, env }
 }
