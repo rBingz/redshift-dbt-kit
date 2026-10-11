@@ -173,8 +173,6 @@ The mod adds a short section to Claude's system prompt. It tells Claude to:
 claude plugin install redshift-dbt-kit --marketplace rBingz/redshift-dbt-kit --scope user
 ```
 
-If the repo is private, you need read access to it, and `gh auth login` done first.
-
 **From a folder:** to share it privately, copy this whole folder somewhere your team can read, such as a team repo. Then each person runs:
 
 ```
