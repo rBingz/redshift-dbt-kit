@@ -3,9 +3,10 @@
 // attempt the mod never waits for.
 import type { On } from 'claude-code'
 
-export const RESOLVES: Record<string, { default: string; dbs: Record<string, string> }> = {
-  shop: { default: 'dev', dbs: { dev: 'dev_alice', bobdev: 'dev_bob', prod: 'analytics' } },
-  billing: { default: 'dev', dbs: { dev: 'analytics' } },
+// Alice's dev target logs in as the same user as prod; Bob has a dev login of his own.
+export const RESOLVES: Record<string, { default: string; dbs: Record<string, string>; users: Record<string, string> }> = {
+  shop: { default: 'dev', dbs: { dev: 'dev_alice', bobdev: 'dev_bob', prod: 'analytics' }, users: { dev: 'alice', bobdev: 'bob_dev', prod: 'alice' } },
+  billing: { default: 'dev', dbs: { dev: 'analytics' }, users: { dev: 'billing' } },
 }
 
 // The same profiles as a teammate might write them: anchors, a merge, Jinja, quoting.
@@ -53,7 +54,7 @@ export function fakeDbt(on: On, calls: string[][] = []) {
       yield { stream: 'stdout' as const, text: `Runtime Error\n  The profile '${profile}' does not have a target named '${target}'.\n` }
       return { value: { code: 2, signal: null } }
     }
-    yield { stream: 'stdout' as const, text: `DBTGUARD ${JSON.stringify({ profile, target, db })}\n` }
+    yield { stream: 'stdout' as const, text: `DBTGUARD ${JSON.stringify({ profile, target, db, user: p.users[target] })}\n` }
     yield { stream: 'stdout' as const, text: 'Database Error\n  connection time out\n' }
     return { value: { code: 2, signal: null } }
   })

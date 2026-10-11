@@ -242,17 +242,18 @@ export function listProfiles(yml: string): Record<string, string[]> {
 // Inline Jinja that makes dbt print the target it resolved. dbt prints it before it connects,
 // so the mod reads that one line and stops dbt.
 export const RESOLVE_SQL =
-  "{{ print('DBTGUARD ' ~ tojson({'profile': target.profile_name, 'target': target.name, 'db': target.get('dbname') or target.get('database')})) }}select 1"
+  "{{ print('DBTGUARD ' ~ tojson({'profile': target.profile_name, 'target': target.name, 'db': target.get('dbname') or target.get('database'), 'user': target.get('user')})) }}select 1"
 
-export type Resolved = { profile: string; target: string; dbname?: string }
+export type Resolved = { profile: string; target: string; dbname?: string; user?: string }
 
 export function parseResolved(text: string): Resolved | undefined {
   const line = text.match(/^DBTGUARD (\{.*\})\s*$/m)?.[1]
   if (line === undefined) return
   try {
-    const r = JSON.parse(line) as { profile?: unknown; target?: unknown; db?: unknown }
+    const r = JSON.parse(line) as { profile?: unknown; target?: unknown; db?: unknown; user?: unknown }
     if (typeof r.profile !== 'string' || typeof r.target !== 'string') return
-    return { profile: r.profile, target: r.target, dbname: typeof r.db === 'string' && r.db ? r.db : undefined }
+    const text = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    return { profile: r.profile, target: r.target, dbname: text(r.db), user: text(r.user) }
   } catch {
     return
   }

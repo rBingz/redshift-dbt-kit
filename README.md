@@ -54,6 +54,15 @@ Run `/config` to change these:
 
 Most teams need no settings: the guard asks dbt where each profile's `prod` target points, and treats that database as prod. If no profile has a target named `prod` (or `prodDbtTarget`) and `prodDatabases` is empty, the mod shows a warning at session start, because then it knows no prod database. If dbt cannot resolve a `prod` target on your machine (for example, its password is an `env_var` only CI sets), the mod says so once and names the target: set `prodDatabases` then.
 
+## Tip: give dev its own login
+
+The guard is a seatbelt: it reads commands, and some will always slip past (see Limits). The real lock is the database's own grants. Claude runs with your login, so whatever that login can do, Claude can do.
+
+- Give each person a dev login (the `user` in their dev target) with no write rights on the prod database.
+- Keep prod logins for deploys, and for the people who run them.
+
+When a guarded dbt write runs on a dev target that logs in as the same user as a `prod` target, the mod shows this tip once, naming both targets. It is not shown again for that user.
+
 ## Limits
 
 - The SQL check is a regex scan, not a parser. A script that hides SQL (`bash run.sh`), a GUI client, or SQL built at run time slips past. The guard is a seatbelt, not a permission system. Keep real prod rights in database grants.

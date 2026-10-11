@@ -82,7 +82,7 @@ async function askDbt($: EngineInterface, dir: string, profile: string, target?:
 
 // The targets a dbt command would use. The profile comes from --profile or the project's
 // dbt_project.yml; when neither names one, every profile with that target counts, so prod wins.
-async function dbtTargets($: EngineInterface, dbt: DbtCall): Promise<{ envs: Env[]; dir: string } | { error: string }> {
+async function dbtTargets($: EngineInterface, dbt: DbtCall): Promise<{ envs: Resolved[]; dir: string } | { error: string }> {
   const dir = await profilesDir($, dbt)
   if (dir === undefined) return { error: 'no profiles.yml found' }
   // dbt's order: --profile (or DBT_PROFILE in the command), $DBT_PROFILE, then dbt_project.yml.
@@ -118,29 +118,49 @@ async function dbtTargets($: EngineInterface, dbt: DbtCall): Promise<{ envs: Env
 // are prod whatever other target reaches them, so a dev-named target writing to one is caught with no
 // setting. A prod target dbt cannot resolve here (say its password is an env_var only CI sets) would
 // leave its database unguarded, so that is said once rather than guarded less quietly.
+// Returns the prod targets it resolved.
 const warnedProd = new Set<string>()
-async function learnProdDatabases($: EngineInterface, dir: string, prodTarget: string, learned: Set<string>) {
+async function learnProdDatabases($: EngineInterface, dir: string, prodTarget: string, learned: Set<string>): Promise<Resolved[]> {
   let listed: Record<string, string[]>
   try {
     listed = listProfiles(await $.fs.read(`${dir}/profiles.yml`))
   } catch {
-    return
+    return []
   }
-  await Promise.all(
+  const found = await Promise.all(
     Object.entries(listed)
       .filter(([, outputs]) => outputs.includes(prodTarget))
       .map(([profile]) =>
         resolveTarget($, dir, profile, prodTarget).then(
-          r => void (r.dbname !== undefined && learned.add(r.dbname)),
+          r => {
+            if (r.dbname !== undefined) learned.add(r.dbname)
+            return r
+          },
           (err: unknown) => {
             const label = `${profile}.${prodTarget}`
-            if (warnedProd.has(label)) return
-            warnedProd.add(label)
-            $.ui.toast(`⚠ redshift-dbt-guard: cannot tell which database ${label} points at (${err instanceof Error ? err.message : String(err)}), so other targets on it are not guarded. Set prodDatabases in /config.`)
+            if (!warnedProd.has(label)) {
+              warnedProd.add(label)
+              $.ui.toast(`⚠ redshift-dbt-guard: cannot tell which database ${label} points at (${err instanceof Error ? err.message : String(err)}), so other targets on it are not guarded. Set prodDatabases in /config.`)
+            }
+            return undefined
           },
         ),
       ),
   )
+  return found.filter((r): r is Resolved => r !== undefined)
+}
+
+// A dev target that logs in as the same database user as a prod target can write prod whatever the
+// guard misses. Say so once per user, ever: the fix (a dev login without prod rights) is the team's.
+const tipped = new Set<string>()
+async function loginTip($: EngineInterface, dev: Resolved, prods: Resolved[]) {
+  const prod = prods.find(p => p.user !== undefined && p.user === dev.user)
+  if (prod === undefined || tipped.has(prod.user!)) return
+  tipped.add(prod.user!)
+  const key = `tip:login:${prod.user}`
+  if (await $.store.get(key)) return
+  await $.store.set(key, true)
+  $.ui.toast(`✻ redshift-dbt-guard tip: ${dev.profile}.${dev.target} and ${prod.profile}.${prod.target} log in as the same user (${prod.user}), so anything run on dev can also write prod. A dev login without write rights on prod closes that for good; the guard is only a seatbelt.`)
 }
 
 // Fill in each listed target's database for the picker, as dbt resolves it: three dbt processes
@@ -690,9 +710,10 @@ export const register: Register = (on, options) => {
       if (!dbt.isWrite && !dbt.fullRefresh && showSql === undefined) continue
       // The command's targets and the prod targets' databases, asked of dbt at once: each takes seconds.
       const dir = await profilesDir($, dbt)
-      const [found] = await Promise.all([dbtTargets($, dbt), dir !== undefined && learnProdDatabases($, dir, prodTarget, learned)])
+      const [found, prods] = await Promise.all([dbtTargets($, dbt), dir === undefined ? [] : learnProdDatabases($, dir, prodTarget, learned)])
       // Fail closed: what cannot be told apart from prod is treated as prod.
       if ('error' in found) return { deny: `${$.plugin.name}: cannot tell which database this dbt command would use (${found.error}). Pass --profile and --target, or fix profiles.yml.` }
+      for (const dev of found.envs.filter(e => !isProdEnv(e))) await loginTip($, dev, prods).catch(() => {}) // a tip is never worth failing the call
       resolved = found.envs
       const prod = found.envs.find(isProdEnv)
       const where = prod && `${envLabel(prod)}${prod.dbname ? ` (database ${prod.dbname})` : ''}`

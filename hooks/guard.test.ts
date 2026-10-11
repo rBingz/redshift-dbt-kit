@@ -284,6 +284,27 @@ describe('guard on dbt', () => {
     expect(await denied($, 'cd billing && dbt run')).toBeUndefined()
   })
 
+  test('a dev target on the prod login gets a tip, once ever', async ($, on) => {
+    const toasts: string[] = []
+    on('ui.toast', ($, e) => {
+      toasts.push(e.text)
+      return { value: undefined }
+    })
+    const saved: string[] = []
+    on('store.get', () => ({ value: undefined }))
+    on('store.set', ($, e) => {
+      saved.push(e.key)
+      return { value: undefined }
+    })
+    engine(on)
+    expect(await denied($, 'dbt run --profile shop --target bobdev')).toBeUndefined()
+    expect(toasts).toEqual([]) // bob_dev is not prod's login
+    expect(await denied($, 'cd shop && dbt run')).toBeUndefined()
+    expect(await denied($, 'cd shop && dbt build')).toBeUndefined()
+    expect(toasts).toEqual([expect.stringContaining('tip: shop.dev and shop.prod log in as the same user (alice)')])
+    expect(saved).toEqual(['tip:login:alice']) // kept, so later sessions stay quiet
+  })
+
   test('outputs the picker cannot list (flow style) may hold a prod target: no warning', async ($, on) => {
     const toasts: string[] = []
     on('ui.toast', ($, e) => {
