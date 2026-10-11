@@ -6,12 +6,14 @@ export const CATALOG_SQL = `select table_schema || '.' || table_name || '.' || c
 from svv_columns
 where table_schema not in ('pg_catalog', 'information_schema', 'pg_internal') and table_schema not like 'pg_temp%'`
 
-// Rows of `dbt show --output json`: the JSON object after any log lines, under `show`.
+// Rows of `dbt show --output json`: the JSON object between log lines, under `show`. dbt indents
+// it, so the first `}` that starts a line closes it; warnings such as a deprecation summary follow.
 export function parseDbtShow(stdout: string): Record<string, unknown>[] | undefined {
   const start = stdout.search(/^{/m)
   if (start < 0) return
+  const end = stdout.slice(start).search(/^}/m)
   try {
-    const doc = JSON.parse(stdout.slice(start)) as { show?: unknown }
+    const doc = JSON.parse(stdout.slice(start, end < 0 ? undefined : start + end + 1)) as { show?: unknown }
     return Array.isArray(doc.show) ? (doc.show as Record<string, unknown>[]) : undefined
   } catch {
     return

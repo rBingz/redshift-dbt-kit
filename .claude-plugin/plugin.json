@@ -1,6 +1,6 @@
 {
   "name": "redshift-dbt-guard",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "types": "./types/index.d.ts",
   "author": {
     "name": "rBingz"

@@ -92,6 +92,8 @@ describe('catalog helpers', () => {
 
   test('dbt show output: JSON after log lines', () => {
     expect(parseDbtShow(SHOW)?.length).toBe(4)
+    // dbt 1.10 prints a deprecation summary after the JSON.
+    expect(parseDbtShow(`${SHOW}\x1b[0m13:15:53  [WARNING][DeprecationsSummary]: Deprecated functionality\nSummary: {x}\n`)?.length).toBe(4)
     expect(parseDbtShow('Runtime Error\n  boom')).toBeUndefined()
   })
 
