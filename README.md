@@ -41,6 +41,8 @@ Checks every command Claude runs in Bash or PowerShell, before it runs.
 | `DROP`, `TRUNCATE`, `ALTER TABLE ... DROP`, `GRANT`, `REVOKE` | `DELETE` and `UPDATE` with a `WHERE` |
 | `DELETE` / `UPDATE` without `WHERE` | anything on a dev database |
 
+On any target, it also blocks `dbt show --limit` above 1,000, or `-1` (no limit): a huge result is slow on Redshift and on your machine.
+
 The SQL check covers `dbt show --inline`, `aws redshift-data` and `psql`: inline, in SQL files, or sent to `psql` with `<`. Destructive SQL with no database named is blocked too.
 
 **How it knows the target:** dbt itself resolves it, so any `profiles.yml` dbt accepts works: Jinja, `env_var()`, YAML anchors and merges, and every place dbt looks for the file. If dbt cannot resolve it, the write is blocked with dbt's error.
@@ -79,7 +81,7 @@ After `dbt show --output json` (or `aws redshift-data get-statement-result`), it
 - the rows as a table; page with `p` and `n`
 - a small area chart per numeric column (a sparkline outside the terminal)
 
-It keeps the first 1,000 rows.
+It keeps the first 1,000 rows. dbt's own `--limit` keeps the query small: dbt adds it to the SQL, so Redshift sends only that many rows. The guard blocks a `--limit` over 1,000.
 
 ## Schema browser
 

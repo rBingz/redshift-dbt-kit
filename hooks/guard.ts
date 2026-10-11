@@ -93,6 +93,7 @@ export type DbtCall = {
   projectDir?: string
   fullRefresh: boolean
   inlineSql?: string
+  limit?: string // dbt show's --limit, as written
   cwd?: string // the folder it runs in, joined from every cd before it; undefined after popd
 }
 
@@ -164,6 +165,7 @@ export function dbtCalls(cmd: string): DbtCall[] {
       projectDir: projectDir && joinPath(shell.cwd, projectDir),
       fullRefresh: after.includes('--full-refresh') || after.includes('-f') || isTruthy(fromEnv.DBT_FULL_REFRESH),
       inlineSql: flag('--inline'),
+      limit: flag('--limit'),
       cwd: shell.cwd,
     })
   }

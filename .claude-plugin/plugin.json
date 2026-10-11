@@ -1,6 +1,6 @@
 {
   "name": "redshift-dbt-kit",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "types": "./types/index.d.ts",
   "author": {
     "name": "rBingz"

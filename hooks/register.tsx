@@ -7,7 +7,7 @@ import type { Manifest } from './catalog'
 import { RESOLVE_SQL, dbtCalls, destructiveSql, listProfiles, parseResolved, sqlCalls } from './guard'
 import type { DbtCall, Resolved } from './guard'
 import { SAMPLE_BOARD, SAMPLE_COLUMNS, SAMPLE_RESULT, dbtVersion, tourPages } from './kit'
-import { SPINNER, areaCells, chip, conventions, explainPrompt, fixPrompt, heat, improvePrompt, isFailed, numericColumns, parseRunResults, parseStatementResult, smoothBar, sparkline, statusCounts, textTable } from './views'
+import { SPINNER, areaCells, chip, conventions, explainPrompt, fixPrompt, heat, improvePrompt, isFailed, numericColumns, parseRunResults, parseStatementResult, smoothBar, sparkline, statusCounts, textTable, MAX_ROWS } from './views'
 
 const TIMED = new Set(['run', 'build', 'test', 'seed', 'snapshot'])
 const BOARD = 'dbt-board'
@@ -300,7 +300,7 @@ function showResult(rows: Record<string, unknown>[], id: string): QueryResult | 
   return {
     id,
     columns: names.map(name => ({ name, type: typeof rows.find(r => r[name] != null)?.[name] === 'number' ? 'numeric' : 'text' })),
-    rows: rows.slice(0, 1000).map(r => names.map(n => cell(r[n]))),
+    rows: rows.slice(0, MAX_ROWS).map(r => names.map(n => cell(r[n]))),
     total: rows.length,
   }
 }
@@ -1061,6 +1061,10 @@ export const register: Register = (on, options) => {
     const calls = dbtCalls(cmd)
     let resolved: Env[] = []
     for (const dbt of calls) {
+      // On any target: a huge result is slow on Redshift and here, and the pane keeps MAX_ROWS anyway.
+      const limit = Number(dbt.limit)
+      if (dbt.hasShow && dbt.limit !== undefined && !(limit >= 0 && limit <= MAX_ROWS))
+        return { deny: `${$.plugin.name}: dbt show --limit ${dbt.limit} is blocked: use --limit ${MAX_ROWS} or less, or aggregate in SQL.` }
       const showSql = dbt.hasShow ? destructiveSql(dbt.inlineSql ?? '') : undefined
       if (!dbt.isWrite && !dbt.fullRefresh && showSql === undefined) continue
       // The command's targets and the prod targets' databases, asked of dbt at once: each takes seconds.

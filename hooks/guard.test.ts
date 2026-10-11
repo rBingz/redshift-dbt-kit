@@ -250,6 +250,14 @@ describe('guard on dbt', () => {
     expect(await denied($, 'cd shop && dbt show --inline "delete from mart.orders"')).toBeUndefined() // dev
   })
 
+  test('dbt show is capped at 1,000 rows, on any target', async ($, on) => {
+    engine(on)
+    expect(await denied($, 'dbt show --target dev --limit -1 --inline "select * from t"')).toContain('--limit -1 is blocked')
+    expect(await denied($, 'dbt show --target dev --limit=5000 --select orders')).toContain('--limit 5000 is blocked')
+    expect(await denied($, 'dbt show --target dev --limit 1000 --inline "select * from t"')).toBeUndefined()
+    expect(await denied($, 'dbt show --target dev --inline "select * from t"')).toBeUndefined() // dbt's default is 5
+  })
+
   test('honours custom prod settings', { options: { prodDbtTarget: 'bobdev', prodDatabases: '' } }, async ($, on) => {
     engine(on)
     expect(await denied($, 'cd billing && dbt run')).toBeUndefined()
