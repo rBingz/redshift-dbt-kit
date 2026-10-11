@@ -82,7 +82,7 @@ After `dbt show --output json` (or `aws redshift-data get-statement-result`), it
 - the rows as a table; page with `p` and `n`
 - a small area chart per numeric column, in row order (a sparkline outside the terminal). Only when the query ends in `ORDER BY`: unsorted rows have no order worth charting.
 
-![Query results: rows of dbt show as a table, with a chart of revenue](docs/rs-results.png)
+![Query results: 90 days of orders as a table, with charts of orders, customers and revenue](docs/rs-results.png)
 
 It keeps the first 1,000 rows. dbt's own `--limit` keeps the query small: dbt adds it to the SQL, so Redshift sends only that many rows. The guard blocks a `--limit` over 1,000.
 
