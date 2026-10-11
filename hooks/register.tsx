@@ -1139,7 +1139,11 @@ export const register: Register = (on, options) => {
     }
     if (ran.deny === undefined) {
       const out: unknown = ran.result
-      const field = (k: string) => (typeof out === 'object' && out !== null && k in out ? String((out as Record<string, unknown>)[k]) : undefined)
+      // A field's text; Claude Code sends some fields as present but undefined.
+      const field = (k: string) => {
+        const v = typeof out === 'object' && out !== null ? (out as Record<string, unknown>)[k] : undefined
+        return typeof v === 'string' ? v : undefined
+      }
       // Output too big to show inline comes back as a preview; Claude Code keeps the whole of it in this file.
       const saved = field('persistedOutputPath')
       const stdout = saved ? await $.fs.read(saved).catch(() => '') : (field('stdout') ?? '')

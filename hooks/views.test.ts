@@ -51,7 +51,7 @@ function engine(on: On) {
   on('tool.call', { tool: 'Bash' }, ($, e) => ({
     result: e.command.includes('--id big')
       ? { stdout: STATEMENT.slice(0, 200), stderr: '', interrupted: false, persistedOutputPath: 'C:/session/tool-results/big.txt', persistedOutputSize: STATEMENT.length }
-      : { stdout: e.command.includes('get-statement-result') ? STATEMENT : e.command.includes('dbt show') ? SHOW : '', stderr: '', interrupted: false },
+      : { stdout: e.command.includes('get-statement-result') ? STATEMENT : e.command.includes('dbt show') ? SHOW : '', stderr: '', interrupted: false, persistedOutputPath: undefined },
   }))
 }
 
