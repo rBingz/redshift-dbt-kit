@@ -7,7 +7,7 @@ import type { Manifest } from './catalog'
 import { RESOLVE_SQL, dbtCalls, destructiveSql, listProfiles, parseResolved, sqlCalls } from './guard'
 import type { DbtCall, Resolved } from './guard'
 import { SAMPLE_BOARD, SAMPLE_COLUMNS, SAMPLE_RESULT, dbtVersion, tourPages } from './kit'
-import { SPINNER, areaCells, chip, conventions, explainPrompt, fixPrompt, heat, improvePrompt, isFailed, numericColumns, parseRunResults, parseStatementResult, smoothBar, sparkline, statusCounts, textTable, MAX_ROWS } from './views'
+import { SPINNER, areaCells, chip, conventions, explainPrompt, fixPrompt, hasOrderBy, heat, improvePrompt, isFailed, numericColumns, parseRunResults, parseStatementResult, smoothBar, sparkline, statusCounts, textTable, MAX_ROWS } from './views'
 
 const TIMED = new Set(['run', 'build', 'test', 'seed', 'snapshot'])
 const BOARD = 'dbt-board'
@@ -292,7 +292,7 @@ async function checkSetup($: EngineInterface, prodTarget: string, prodDatabases:
 }
 
 // `dbt show --output json` rows in the results pane's shape; a column is numeric when its first value is.
-function showResult(rows: Record<string, unknown>[], id: string): QueryResult | undefined {
+function showResult(rows: Record<string, unknown>[], id: string, isOrdered: boolean): QueryResult | undefined {
   const first = rows[0]
   if (first === undefined) return
   const names = Object.keys(first)
@@ -302,6 +302,7 @@ function showResult(rows: Record<string, unknown>[], id: string): QueryResult | 
     columns: names.map(name => ({ name, type: typeof rows.find(r => r[name] != null)?.[name] === 'number' ? 'numeric' : 'text' })),
     rows: rows.slice(0, MAX_ROWS).map(r => names.map(n => cell(r[n]))),
     total: rows.length,
+    isOrdered,
   }
 }
 
@@ -324,7 +325,7 @@ async function capture($: EngineInterface, cmd: string, dbt: DbtCall | undefined
     }
     if (dbt?.hasShow) {
       const rows = parseDbtShow(stdout)
-      result = rows && showResult(rows, dbt.target ? `dbt show · ${dbt.target}` : 'dbt show')
+      result = rows && showResult(rows, dbt.target ? `dbt show · ${dbt.target}` : 'dbt show', hasOrderBy(dbt.inlineSql ?? ''))
     } else if (/redshift-data\s+get-statement-result/.test(cmd)) {
       result = parseStatementResult(stdout, cmd.match(/--id[=\s]+["']?([\w-]+)/)?.[1] ?? '?')
     }
@@ -793,9 +794,12 @@ export const register: Register = (on, options) => {
     if (result === null) return <Text dimColor>✻ No query result yet. Results of dbt show --output json show here.</Text>
 
     const width = e.props.bodyColumns - 2
-    const charts = numericColumns(result).slice(0, 3)
+    // Charts follow row order, which means nothing unless the query sorted its rows.
+    const numeric = numericColumns(result)
+    const charts = result.isOrdered ? numeric.slice(0, 3) : []
+    const isUnsorted = !result.isOrdered && numeric.length > 0
     const chartRows = Raster ? 2 : 1
-    const size = Math.max(1, (e.viewport?.rows ?? 24) - 9 - charts.length * chartRows)
+    const size = Math.max(1, (e.viewport?.rows ?? 24) - 9 - charts.length * chartRows - (isUnsorted ? 1 : 0))
     const pages = Math.max(1, Math.ceil(result.rows.length / size))
     const at = Math.min(await read($, page), pages - 1)
     const table = textTable(result, result.rows.slice(at * size, (at + 1) * size), width)
@@ -819,6 +823,7 @@ export const register: Register = (on, options) => {
           ))}
         </Box>
         <Box paddingX={1} flexDirection="column">
+          {isUnsorted && <Text dimColor wrap="truncate-end">No charts: the query has no ORDER BY, so row order means nothing.</Text>}
           {charts.map(i =>
             Raster ? (
               <Box>

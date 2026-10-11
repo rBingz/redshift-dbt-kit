@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { fakeDbt } from './fake-dbt'
-import { conventions, improvePrompt, numericColumns, parseRunResults, parseStatementResult, sparkline, textTable } from './views'
+import { conventions, hasOrderBy, improvePrompt, numericColumns, parseRunResults, parseStatementResult, sparkline, textTable } from './views'
 
 // A dev build whose profile is named, so the guard resolves it through the fake dbt.
 const DEV_BUILD = ['dbt', 'build', '--profile', 'shop', '--target', 'dev'].join(' ')
@@ -33,6 +33,9 @@ const STATEMENT = JSON.stringify({
 
 const RESULT_CMD = 'aws redshift-data get-statement-result --id 7f3c-11aa'
 
+// The same rows as `dbt show --output json` prints them, after its log line.
+const SHOW = `12:00:00  Running with dbt=1.10.11\n${JSON.stringify({ show: Array.from({ length: 30 }, (_, i) => ({ day: `2026-10-${String(i + 1).padStart(2, '0')}`, orders: 100 + i * 10 })) }, null, 2)}\n`
+
 // Beneath the plugin: env, clock, dbt, files, and a Bash that prints query JSON for get-statement-result.
 function engine(on: On) {
   mock.env(on, { USERPROFILE: 'C:/home' })
@@ -48,7 +51,7 @@ function engine(on: On) {
   on('tool.call', { tool: 'Bash' }, ($, e) => ({
     result: e.command.includes('--id big')
       ? { stdout: STATEMENT.slice(0, 200), stderr: '', interrupted: false, persistedOutputPath: 'C:/session/tool-results/big.txt', persistedOutputSize: STATEMENT.length }
-      : { stdout: e.command.includes('get-statement-result') ? STATEMENT : '', stderr: '', interrupted: false },
+      : { stdout: e.command.includes('get-statement-result') ? STATEMENT : e.command.includes('dbt show') ? SHOW : '', stderr: '', interrupted: false },
   }))
 }
 
@@ -75,6 +78,15 @@ describe('view helpers', () => {
     expect(numericColumns(result)).toEqual([1])
     expect(parseStatementResult('{"Id": "x"}', 'x')).toBeUndefined()
     expect(parseStatementResult('not json', 'x')).toBeUndefined()
+  })
+
+  test('ORDER BY counts only when it sorts the result', () => {
+    expect(hasOrderBy('select * from t order by day')).toBe(true)
+    expect(hasOrderBy('select day, sum(x) from t group by 1\nORDER  BY 1 desc')).toBe(true)
+    expect(hasOrderBy('select * from t')).toBe(false)
+    expect(hasOrderBy('select row_number() over (partition by a order by b) from t')).toBe(false)
+    expect(hasOrderBy('select * from (select * from t order by x) s')).toBe(false)
+    expect(hasOrderBy("select 'order by' as note from t -- order by x")).toBe(false)
   })
 
   test('table drops columns that do not fit; sparkline rises', () => {
@@ -117,10 +129,10 @@ describe('panes', () => {
 
   test('query results: table, charts per surface, paging', async ($, on) => {
     engine(on)
-    await $.tool.call({ tool: 'Bash', command: RESULT_CMD })
+    await $.tool.call({ tool: 'Bash', command: 'dbt show --target dev --output json --inline "select day, orders from t order by day"' })
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount({ surface, ...pane('rs-results', '✻ Query results') })
-      expect(await ui.find({ type: 'Text', text: /✻ 30 rows · 3 columns · statement 7f3c-11aa/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /✻ 30 rows · 2 columns · statement dbt show · dev/ })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /page 1\/\d/ })).toBeDefined()
       if (surface === 'terminal') expect(await ui.find({ type: 'Raster', key: 'chart-1' })).toBeDefined()
       else expect(await ui.find({ type: 'Text', text: /▁.*█/ })).toBeDefined()
@@ -131,6 +143,20 @@ describe('panes', () => {
       await ui.press({ key: 'prev' })
       await ui.unmount()
     }
+  })
+
+  test('no charts when the query does not sort its rows', async ($, on) => {
+    engine(on)
+    await $.tool.call({ tool: 'Bash', command: 'dbt show --target dev --output json --inline "select day, orders from t"' })
+    let ui = await $.ui.mount({ surface: 'terminal', ...pane('rs-results', '✻ Query results') })
+    expect(await ui.find({ type: 'Text', text: /^2026-10-01/ })).toBeDefined()
+    expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /No charts: the query has no ORDER BY/ })).toBeDefined()
+    await ui.unmount()
+    await $.tool.call({ tool: 'Bash', command: RESULT_CMD }) // its SQL is not in the command
+    ui = await $.ui.mount({ surface: 'terminal', ...pane('rs-results', '✻ Query results') })
+    expect(await ui.find({ type: 'Text', text: /statement 7f3c-11aa/ })).toBeDefined()
+    expect(await ui.find({ type: 'Raster' })).toBeUndefined()
   })
 
   test('query results too big to show inline are read from the saved output', async ($, on) => {

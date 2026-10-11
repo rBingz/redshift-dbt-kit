@@ -1,7 +1,7 @@
 export type BoardRow = { name: string; status: string; seconds: number; rowsAffected?: number; message?: string }
 export type Board = { command: string; elapsed: number; rows: BoardRow[] }
 export type Running = { command: string; startedAt: number }
-export type QueryResult = { id: string; columns: { name: string; type: string }[]; rows: (string | null)[][]; total: number }
+export type QueryResult = { id: string; columns: { name: string; type: string }[]; rows: (string | null)[][]; total: number; isOrdered?: boolean }
 export type Catalog = {
   status: 'empty' | 'loading' | 'ready' | 'error'
   message?: string
