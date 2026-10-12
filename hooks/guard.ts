@@ -202,6 +202,77 @@ export function sqlCalls(cmd: string): SqlCall[] {
   return calls
 }
 
+// dbt-mcp, dbt Labs' MCP server (github.com/dbt-labs/dbt-mcp). Its tools run dbt for Claude with no
+// --target of their own: the server's environment picks the project, the profiles and the target.
+export const MCP_DBT_VERBS = new Set(['build', 'run', 'test', 'clone', 'show'])
+// dbt Platform jobs usually run on prod, and the mod cannot tell which: a human starts them.
+export const MCP_DBT_JOBS = new Set(['trigger_job_run', 'retry_job_run'])
+export type McpServerConfig = { command?: unknown; args?: unknown; env?: unknown }
+
+// `mcp__<server>__<tool>` split at its last `__`.
+export function mcpTool(tool: string): { server: string; name: string } | undefined {
+  const at = tool.lastIndexOf('__')
+  if (!tool.startsWith('mcp__') || at < 6) return
+  return { server: tool.slice(5, at), name: tool.slice(at + 2) }
+}
+
+// A server's entry in Claude Code's MCP settings, by the name its tools carry: every character
+// other than a letter, digit, _ or - becomes _. Scopes in Claude Code's order: local, project, user.
+export function findMcpServer(server: string, scopes: unknown[]): McpServerConfig | undefined {
+  for (const servers of scopes) {
+    if (typeof servers !== 'object' || servers === null) continue
+    for (const [name, config] of Object.entries(servers)) {
+      if (name.replace(/[^\w-]/g, '_') === server && typeof config === 'object' && config !== null) return config
+    }
+  }
+}
+
+const words = (v: unknown) => (Array.isArray(v) ? v.filter((w): w is string => typeof w === 'string') : [])
+
+export const isDbtMcp = (server: string, config: McpServerConfig | undefined) =>
+  /dbt/i.test(server) || /dbt[-_]mcp/i.test([config?.command, ...words(config?.args)].join(' '))
+
+// The files `uvx --env-file <file> dbt-mcp` loads.
+export const envFiles = (config: McpServerConfig | undefined) => {
+  const args = words(config?.args)
+  return args.flatMap((a, i) => (a === '--env-file' ? [args[i + 1] ?? ''] : a.startsWith('--env-file=') ? [a.slice('--env-file='.length)] : [])).filter(Boolean)
+}
+
+// The KEY=value lines of a .env file, as python-dotenv reads them.
+export function parseDotenv(text: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?(\w+)\s*=\s*(.*?)\s*$/)
+    if (m === null) continue
+    const quoted = m[2]!.match(/^(["'])(.*)\1$/)
+    env[m[1]!] = quoted ? quoted[2]! : m[2]!.replace(/\s+#.*$/, '')
+  }
+  return env
+}
+
+// A dbt-mcp tool call as the dbt call it makes, or why it is blocked before dbt starts.
+export function dbtMcpCall(name: string, args: Record<string, unknown>, env: Record<string, string | undefined>): DbtCall | { deny: string } | undefined {
+  if (!MCP_DBT_VERBS.has(name)) return
+  const sql = typeof args.sql_query === 'string' ? args.sql_query : ''
+  // dbt-mcp runs SQL that mentions "limit" anywhere just as written, with --limit -1: no row cap,
+  // and no select around it, so a DELETE in it would run.
+  if (name === 'show' && /limit/i.test(sql))
+    return { deny: 'dbt-mcp runs SQL that mentions "limit" with no row cap, as written. Take LIMIT out of the SQL and pass the limit argument instead, or run dbt show --limit through Bash.' }
+  return {
+    verb: name,
+    isWrite: DBT_WRITES.has(name),
+    hasShow: name === 'show',
+    target: env.DBT_TARGET || undefined,
+    profile: env.DBT_PROFILE || undefined,
+    profilesDir: env.DBT_PROFILES_DIR || undefined,
+    projectDir: env.DBT_PROJECT_DIR || undefined,
+    fullRefresh: args.is_full_refresh === true,
+    inlineSql: name === 'show' ? sql : undefined,
+    limit: name === 'show' && args.limit ? String(args.limit) : undefined,
+    cwd: env.DBT_PROJECT_DIR || undefined, // dbt-mcp runs dbt in the project folder
+  }
+}
+
 // Profile names and each profile's output names, for listing only. Every value (default target,
 // database) comes from dbt itself, so Jinja, env_var(), anchors and merges resolve as dbt resolves them.
 // shortcut: reads block-style keys; outputs written in flow style or as an alias are not listed,

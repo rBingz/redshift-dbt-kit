@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { PROFILES_YML, fakeDbt } from './fake-dbt'
-import { dbtCalls, destructiveSql, listProfiles, parseResolved, shellParts, sqlCalls } from './guard'
+import { dbtCalls, dbtMcpCall, destructiveSql, envFiles, findMcpServer, isDbtMcp, listProfiles, mcpTool, parseDotenv, parseResolved, shellParts, sqlCalls } from './guard'
 
 const FILES: Record<string, string> = {
   'home/.dbt/profiles.yml': PROFILES_YML,
@@ -15,8 +15,8 @@ const FILES: Record<string, string> = {
 
 // Stand in for the engine beneath the plugin: files, env, clock, dbt, and shells that always succeed.
 // `mtime` is profiles.yml's last change, for the cache tests.
-function engine(on: On, opts: { calls?: string[][]; withDbt?: boolean; mtime?: { value: number }; profiles?: string } = {}) {
-  const files: Record<string, string> = { ...FILES, ...(opts.profiles === undefined ? {} : { 'home/.dbt/profiles.yml': opts.profiles }) }
+function engine(on: On, opts: { calls?: string[][]; withDbt?: boolean; mtime?: { value: number }; profiles?: string; files?: Record<string, string> } = {}) {
+  const files: Record<string, string> = { ...FILES, ...(opts.profiles === undefined ? {} : { 'home/.dbt/profiles.yml': opts.profiles }), ...opts.files }
   mock.env(on, { USERPROFILE: 'C:/home' })
   mock.clock(on)
   if (opts.withDbt !== false) fakeDbt(on, opts.calls)
@@ -331,5 +331,87 @@ describe('guard on dbt', () => {
     engine(on)
     on('tool.call', { tool: 'Glob' }, () => ({ result: { filenames: [], durationMs: 0, numFiles: 0, truncated: false } }))
     expect((await $.tool.call({ tool: 'Glob', pattern: 'models/**/*.sql' })).deny).toBeUndefined()
+  })
+})
+
+describe('dbt-mcp, pure', () => {
+  test('tool names, settings, env files', () => {
+    expect(mcpTool('mcp__dbt__run')).toEqual({ server: 'dbt', name: 'run' })
+    expect(mcpTool('mcp__dbt_core__get_lineage_dev')).toEqual({ server: 'dbt_core', name: 'get_lineage_dev' })
+    expect(mcpTool('Bash')).toBeUndefined()
+    const config = { command: 'uvx', args: ['--env-file', 'C:/work/.env', 'dbt-mcp'] }
+    expect(findMcpServer('dbt_core', [undefined, { other: {} }, { 'dbt core': config }])).toBe(config)
+    expect(findMcpServer('dbt', [{ dbt: { command: 'a' } }, { dbt: { command: 'b' } }])).toEqual({ command: 'a' }) // local scope first
+    expect(isDbtMcp('data', config)).toBe(true)
+    expect(isDbtMcp('linear', { command: 'npx', args: ['linear-mcp'] })).toBe(false)
+    expect(envFiles(config)).toEqual(['C:/work/.env'])
+    expect(envFiles({ args: ['--env-file=a.env', 'dbt-mcp'] })).toEqual(['a.env'])
+    expect(parseDotenv('# dbt\nDBT_TARGET=prod # live\nexport DBT_PROJECT_DIR="C:/work/shop"\nBAD LINE\n')).toEqual({ DBT_TARGET: 'prod', DBT_PROJECT_DIR: 'C:/work/shop' })
+  })
+
+  test('a tool call as the dbt call it makes', () => {
+    const env = { DBT_PROJECT_DIR: 'C:/work/shop', DBT_TARGET: 'prod' }
+    expect(dbtMcpCall('run', { is_full_refresh: true }, env)).toMatchObject({ verb: 'run', isWrite: true, fullRefresh: true, target: 'prod', projectDir: 'C:/work/shop', cwd: 'C:/work/shop' })
+    expect(dbtMcpCall('test', {}, {})).toMatchObject({ verb: 'test', isWrite: false, target: undefined })
+    expect(dbtMcpCall('show', { sql_query: 'select 1', limit: 50 }, env)).toMatchObject({ hasShow: true, inlineSql: 'select 1', limit: '50' })
+    // dbt-mcp passes --limit -1 for any SQL that mentions "limit": no cap, and the SQL runs as written.
+    expect(dbtMcpCall('show', { sql_query: 'select credit_limit from customers' }, env)).toEqual({ deny: expect.stringContaining('no row cap') })
+    expect(dbtMcpCall('get_lineage_dev', {}, env)).toBeUndefined()
+  })
+})
+
+describe('guard on dbt-mcp', () => {
+  // dbt-mcp set up at user scope in ~/.claude.json, its project and target in its env.
+  const settings = (env: Record<string, string>, name = 'dbt', command = 'uvx') =>
+    JSON.stringify({ mcpServers: { [name]: { type: 'stdio', command, args: [command === 'uvx' ? 'dbt-mcp' : 'jobs-server.js'], env } } })
+  const mcpEngine = (on: On, env: Record<string, string>, name?: string, command?: string) => {
+    engine(on, { files: { 'home/.claude.json': settings(env, name, command) } })
+    on('tool.call', ($, e, next) => (e.tool.startsWith('mcp__') ? { result: { content: [{ type: 'text', text: 'ok' }], isError: false } } : next(e)))
+  }
+  const mcp = async ($: Engine, tool: `mcp__${string}__${string}`, args: Record<string, unknown> = {}) => (await $.tool.call({ tool, ...args } as never)).deny // never: MCP tool names are typed per connected server
+
+  test('writes on prod are blocked by the target the server runs with', async ($, on) => {
+    mcpEngine(on, { DBT_PROJECT_DIR: 'C:/work/shop', DBT_TARGET: 'prod' })
+    expect(await mcp($, 'mcp__dbt__run')).toContain('dbt run against shop.prod (database analytics)')
+    expect(await mcp($, 'mcp__dbt__build')).toContain('dbt build against shop.prod')
+    expect(await mcp($, 'mcp__dbt__clone')).toContain('dbt clone against shop.prod')
+    expect(await mcp($, 'mcp__dbt__show', { sql_query: 'delete from mart.orders' })).toContain('through dbt show on shop.prod')
+    expect(await mcp($, 'mcp__dbt__show', { sql_query: 'select * from mart.orders' })).toBeUndefined()
+  })
+
+  test('with no DBT_TARGET, the profile default counts: a dev target on the prod database is prod', async ($, on) => {
+    mcpEngine(on, { DBT_PROJECT_DIR: 'C:/work/billing' })
+    expect(await mcp($, 'mcp__dbt__run')).toContain('billing.dev (database analytics)')
+  })
+
+  test('dev runs pass', async ($, on) => {
+    mcpEngine(on, { DBT_PROJECT_DIR: 'C:/work/shop', DBT_TARGET: 'dev' })
+    expect(await mcp($, 'mcp__dbt__run', { node_selection: 'orders' })).toBeUndefined()
+    expect(await mcp($, 'mcp__dbt__run', { is_full_refresh: true })).toBeUndefined()
+  })
+
+  test('show is capped, and SQL that mentions limit is blocked on any target', async ($, on) => {
+    mcpEngine(on, { DBT_PROJECT_DIR: 'C:/work/shop', DBT_TARGET: 'dev' })
+    expect(await mcp($, 'mcp__dbt__show', { sql_query: 'delete from mart.orders -- limit' })).toContain('no row cap')
+    expect(await mcp($, 'mcp__dbt__show', { sql_query: 'select * from t', limit: 5000 })).toContain('--limit 5000 is blocked')
+    expect(await mcp($, 'mcp__dbt__show', { sql_query: 'select * from t', limit: 1000 })).toBeUndefined()
+  })
+
+  test('dbt Platform jobs and destructive execute_sql are blocked', async ($, on) => {
+    mcpEngine(on, { DBT_PROJECT_DIR: 'C:/work/shop' })
+    expect(await mcp($, 'mcp__dbt__trigger_job_run', { job_id: 1 })).toContain('trigger_job_run through dbt-mcp is blocked')
+    expect(await mcp($, 'mcp__dbt__execute_sql', { sql: 'drop table mart.orders' })).toContain('DROP through dbt-mcp execute_sql')
+    expect(await mcp($, 'mcp__dbt__execute_sql', { sql: 'select 1' })).toBeUndefined()
+  })
+
+  test('a server is dbt-mcp by its name or its command; other servers pass untouched', async ($, on) => {
+    mcpEngine(on, { DBT_PROJECT_DIR: 'C:/work/shop', DBT_TARGET: 'prod' }, 'data tools')
+    expect(await mcp($, 'mcp__data_tools__run')).toContain('shop.prod')
+    expect(await mcp($, 'mcp__linear__run')).toBeUndefined() // not in the settings, no dbt in its name
+  })
+
+  test('a server that is not dbt-mcp keeps its run tool', async ($, on) => {
+    mcpEngine(on, {}, 'jobs', 'node')
+    expect(await mcp($, 'mcp__jobs__run')).toBeUndefined()
   })
 })

@@ -190,6 +190,7 @@ export function conventions(prodDatabases: string[], prodTarget: string): string
     '- Pass --target on every dbt command, and --profile outside a dbt project, so the guard and the status line know the environment.',
     `- Prod is the target \`${prodTarget}\` and the database it points at${also}. Any target that points at a prod database is prod too, whatever it is called. On prod the guard blocks dbt run, build, seed, snapshot, run-operation and --full-refresh, and destructive SQL through dbt show. If a call is blocked, do not work around it: tell the user what to run on prod themselves.`,
     '- Explore with SELECT. Never DROP, TRUNCATE, DELETE or UPDATE without WHERE, ALTER ... DROP, GRANT or REVOKE on prod.',
+    '- dbt-mcp tools (run, build, test, clone, show), when connected, are guarded the same way, by the target their server runs with, and fill the same panes. Give show its row cap as the limit argument: dbt-mcp runs SQL that mentions "limit" uncapped, so the guard blocks it.',
     '- Avoid dbt commands on lines of a heredoc body: the guard reads each line as a command, so it checks them as if they ran. Quoted text is fine.',
     '- To check whether a column exists, the user can open /rs-schema.',
   ].join('\n')

@@ -37,13 +37,15 @@ const RESULT_CMD = 'aws redshift-data get-statement-result --id 7f3c-11aa'
 const SHOW = `12:00:00  Running with dbt=1.10.11\n${JSON.stringify({ show: Array.from({ length: 30 }, (_, i) => ({ day: `2026-10-${String(i + 1).padStart(2, '0')}`, orders: 100 + i * 10 })) }, null, 2)}\n`
 
 // Beneath the plugin: env, clock, dbt, files, and a Bash that prints query JSON for get-statement-result.
-function engine(on: On) {
+function engine(on: On, files: Record<string, string> = {}) {
   mock.env(on, { USERPROFILE: 'C:/home' })
   mock.clock(on)
   fakeDbt(on)
   on('fs.exists', () => ({ value: false }))
+  const file = (path: string) => Object.keys(files).find(k => path.replace(/\\/g, '/').endsWith(k))
   on('fs.read', ($, e) =>
-    e.path.replace(/\\/g, '/').endsWith('/target/run_results.json') ? { value: RUN_RESULTS }
+    file(e.path) !== undefined ? { value: files[file(e.path)!]! }
+    : e.path.replace(/\\/g, '/').endsWith('/target/run_results.json') ? { value: RUN_RESULTS }
     : e.path.endsWith('big.txt') ? { value: STATEMENT }
     : { deny: `ENOENT ${e.path}` },
   )
@@ -179,6 +181,21 @@ describe('panes', () => {
     ui = await $.ui.mount({ surface: 'terminal', ...pane('rs-results', '✻ Query results') })
     expect(await ui.find({ type: 'Text', text: /statement 7f3c-11aa/ })).toBeDefined()
     expect(await ui.find({ type: 'Raster' })).toBeUndefined()
+  })
+
+  test('dbt-mcp calls fill the panes too', async ($, on) => {
+    // dbt-mcp at user scope, on the shop project's dev target; it answers with dbt's output in text blocks.
+    const settings = JSON.stringify({ mcpServers: { dbt: { command: 'uvx', args: ['dbt-mcp'], env: { DBT_PROJECT_DIR: 'C:/work/shop', DBT_PROFILE: 'shop', DBT_TARGET: 'dev' } } } })
+    on('tool.call', ($, e, next) => (e.tool.startsWith('mcp__dbt__') ? { result: { content: [{ type: 'text', text: e.tool.endsWith('show') ? SHOW : 'OK' }], isError: false } } : next(e)))
+    engine(on, { '/home/.claude.json': settings }) // after the hook above, so it answers first
+    await $.tool.call({ tool: 'mcp__dbt__show', sql_query: 'select day, orders from t order by day' } as never)
+    let ui = await $.ui.mount({ surface: 'terminal', ...pane('rs-results', '✻ Query results') })
+    expect(await ui.find({ type: 'Text', text: /✻ 30 rows · 2 columns/ })).toBeDefined()
+    expect(await ui.find({ type: 'Raster', key: 'chart-1' })).toBeDefined()
+    await ui.unmount()
+    await $.tool.call({ tool: 'mcp__dbt__build' } as never)
+    ui = await $.ui.mount({ surface: 'terminal', ...pane('dbt-board', '✻ dbt run') })
+    expect(await ui.find({ type: 'Text', text: /✻ dbt build · 43s · 1 success · 1 error · 1 pass/ })).toBeDefined()
   })
 
   test('query results too big to show inline are read from the saved output', async ($, on) => {

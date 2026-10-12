@@ -30,7 +30,7 @@ Panes open on their own when the terminal is wide enough. Otherwise, open them w
 
 ## Guard
 
-Checks every command Claude runs in Bash or PowerShell, before it runs.
+Checks every command Claude runs in Bash or PowerShell, and every [dbt-mcp](#works-with-dbt-mcp) call, before it runs.
 
 ![The guard page of the tour: a dbt run on prod blocked, the same run on dev allowed](docs/dbt-guard.png)
 
@@ -58,6 +58,21 @@ The SQL check covers `dbt show --inline`, `aws redshift-data` and `psql`: inline
 
 > [!WARNING]
 > The guard is a seatbelt, not a permission system. Some commands will always slip past (see [Limits](#limits)). Keep real prod rights in database grants: see [Give dev its own login](#tip-give-dev-its-own-login).
+
+### Works with dbt-mcp
+
+[dbt-mcp](https://github.com/dbt-labs/dbt-mcp), dbt Labs' MCP server, gives Claude dbt as tools instead of shell commands. Its tools take no `--target`: the server's environment picks it. The kit reads that environment from the server's settings (`~/.claude.json` or `.mcp.json`, plus its `.env` and `--env-file`), so its calls get the same checks and fill the same panes:
+
+| dbt-mcp tool | What the kit does |
+| --- | --- |
+| `run`, `build`, `clone` | Blocked on prod, like `dbt run --target prod`. Fills the run board. |
+| `test` | Fills the run board. |
+| `show` | Blocked on prod with destructive SQL; capped at 1,000 rows. Fills the results pane. |
+| `show` with SQL that mentions `limit` | Blocked on any target: dbt-mcp then runs the SQL as written, with no row cap. Pass the `limit` argument instead. |
+| `execute_sql` | Blocked with destructive SQL: it runs on dbt Platform, where the kit cannot tell dev from prod. |
+| `trigger_job_run`, `retry_job_run` | Blocked: dbt Platform jobs usually run on prod. |
+
+A server counts as dbt-mcp when its name has `dbt` in it, or its command runs `dbt-mcp`. Its other tools (lineage, Semantic Layer, Discovery) pass untouched.
 
 ## Status line
 
@@ -233,6 +248,7 @@ Open an issue on the repo, or tell whoever shared the mod with you. Include:
 - `bash -c "..."`, `powershell -Command "..."`, `make`, scripts and aliases are not read: the command inside is quoted or in another file.
 - Quoted text is not read as a command, except `$(...)` and backticks inside double quotes, which the shell runs.
 - Each line of a heredoc body is read as a command, so a dbt write written there is checked as if it ran.
+- dbt-mcp: it reads servers set up in Claude Code's settings files. A dbt-mcp that another plugin starts, or `${VAR}` in a server's settings, is not read: its calls are then checked with Claude Code's own `DBT_*` variables and the profile's default target.
 
 </details>
 

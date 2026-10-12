@@ -4,8 +4,8 @@ import type { EngineInterface, Register, RenderElement, RenderInputOf, RenderSur
 import type { Board, Catalog, Check, Env, ModelCard, QueryResult, Running, Setup } from '../types'
 import { CATALOG_SQL, ago, modelCard, modelPath, parseDbtShow, searchCatalog } from './catalog'
 import type { Manifest } from './catalog'
-import { RESOLVE_SQL, dbtCalls, destructiveSql, listProfiles, parseResolved, sqlCalls } from './guard'
-import type { DbtCall, Resolved } from './guard'
+import { MCP_DBT_JOBS, MCP_DBT_VERBS, RESOLVE_SQL, dbtCalls, dbtMcpCall, destructiveSql, envFiles, findMcpServer, isDbtMcp, listProfiles, mcpTool, parseDotenv, parseResolved, sqlCalls } from './guard'
+import type { DbtCall, McpServerConfig, Resolved } from './guard'
 import { SAMPLE_BOARD, SAMPLE_COLUMNS, SAMPLE_RESULT, dbtVersion, tourPages } from './kit'
 import { SPINNER, areaCells, chip, conventions, explainPrompt, fixPrompt, hasOrderBy, heat, improvePrompt, isFailed, numericColumns, parseRunResults, parseStatementResult, smoothBar, sparkline, statusCounts, textTable, MAX_ROWS } from './views'
 
@@ -53,6 +53,35 @@ async function profilesDir($: EngineInterface, call: DbtCall): Promise<string | 
 // The folder of the project a call runs, where its dbt_project.yml and target/ are; undefined after popd.
 async function projectDir($: EngineInterface, call: DbtCall): Promise<string | undefined> {
   return call.projectDir ?? (await $.env.get('DBT_PROJECT_DIR')) ?? call.cwd
+}
+
+// A dbt-mcp server's settings in Claude Code (local, project, then user scope) and the environment it
+// runs dbt with: the .env it reads and its --env-file, under Claude Code's own variables, under the
+// server's `env`. shortcut: reads servers set up in Claude Code's settings files, with ${VAR} left
+// unexpanded; a dbt-mcp a plugin starts reads as unset. Add those if the team uses them.
+async function dbtMcpServer($: EngineInterface, server: string, cwd: string): Promise<{ config?: McpServerConfig; env: Record<string, string | undefined> }> {
+  const json = async (path: string): Promise<Record<string, unknown>> => {
+    try {
+      const v: unknown = JSON.parse(await $.fs.read(path))
+      return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {}
+    } catch {
+      return {}
+    }
+  }
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  const user = await json(`${(await $.env.get('CLAUDE_CONFIG_DIR')) ?? home}/.claude.json`)
+  const project = await json('.mcp.json')
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
+  const projects = typeof user.projects === 'object' && user.projects !== null ? (user.projects as Record<string, { mcpServers?: unknown }>) : {}
+  const local = Object.entries(projects).find(([p]) => norm(p) === norm(cwd))?.[1]?.mcpServers
+  const config = findMcpServer(server, [local, project.mcpServers, user.mcpServers])
+  const env: Record<string, string | undefined> = {}
+  for (const file of ['.env', ...envFiles(config)]) Object.assign(env, parseDotenv(await $.fs.read(file).catch(() => '')))
+  // Literal names: the engine lists the variables a module reads.
+  const own = { DBT_TARGET: await $.env.get('DBT_TARGET'), DBT_PROFILE: await $.env.get('DBT_PROFILE'), DBT_PROFILES_DIR: await $.env.get('DBT_PROFILES_DIR'), DBT_PROJECT_DIR: await $.env.get('DBT_PROJECT_DIR') }
+  for (const [k, v] of Object.entries(own)) if (v !== undefined) env[k] = v
+  if (typeof config?.env === 'object' && config.env !== null) for (const [k, v] of Object.entries(config.env)) if (typeof v === 'string') env[k] = v
+  return { config, env }
 }
 
 // dbt's own answer to "which target and database would this be?": it renders profiles.yml with
@@ -460,6 +489,7 @@ export const register: Register = (on, options) => {
   const isProdDb = (db: string) => prodDatabases.includes(db) || learned.has(db)
   const isProdEnv = (e: Env) => e.target === prodTarget || (e.dbname !== undefined && isProdDb(e.dbname))
   const shown: { dbt?: Env } = {}
+  let sessionCwd = '.' // where Claude Code started: dbt-mcp's local-scope settings are keyed by it
 
   const statusText = () => {
     if (shown.dbt === undefined) return undefined
@@ -467,6 +497,7 @@ export const register: Register = (on, options) => {
   }
 
   on('session.start', async ($, e, next) => {
+    sessionCwd = e.cwd
     $.ui.status(statusText())
     // Nothing to learn prod from and nothing configured: say so once, rather than guard nothing quietly.
     const listed = await profilesDir($, HERE)
@@ -1062,15 +1093,40 @@ export const register: Register = (on, options) => {
     return ran
   }).catch(($, e, next) => next(e))
 
-  // The guard, over every shell Claude has: Bash, and PowerShell on Windows. Other tools pass untouched.
+  // The guard, over every shell Claude has (Bash, and PowerShell on Windows) and dbt-mcp's tools.
+  // Other tools pass untouched.
   const isShell = (tool: string) => tool === 'Bash' || tool === 'PowerShell'
+  const isMcpGuarded = (tool: string) => {
+    const name = mcpTool(tool)?.name ?? ''
+    return MCP_DBT_VERBS.has(name) || MCP_DBT_JOBS.has(name) || name === 'execute_sql'
+  }
   on('tool.call', async ($, e, next) => {
     const cmd = e.tool === 'Bash' || e.tool === 'PowerShell' ? e.command : undefined
-    if (cmd === undefined) return next(e)
+    if (cmd === undefined && !isMcpGuarded(e.tool)) return next(e)
     const deny = (why: string) => ({ deny: `${$.plugin.name}: ${why} Run it on dev, or have a human run it on prod.` })
 
+    let calls: DbtCall[]
+    if (cmd !== undefined) {
+      calls = dbtCalls(cmd)
+    } else {
+      const mcp = mcpTool(e.tool)!
+      const server = await dbtMcpServer($, mcp.server, sessionCwd)
+      if (!isDbtMcp(mcp.server, server.config)) return next(e)
+      const args: Record<string, unknown> = { ...e }
+      if (MCP_DBT_JOBS.has(mcp.name)) return deny(`${mcp.name} through dbt-mcp is blocked: dbt Platform jobs usually run on prod, and the mod cannot tell which.`)
+      if (mcp.name === 'execute_sql') {
+        // It runs on dbt Platform, where the mod cannot tell dev from prod: destructive SQL is blocked everywhere.
+        const bad = destructiveSql(Object.entries(args).filter(([k, v]) => k !== 'tool' && k !== 'tool_use_id' && typeof v === 'string').map(([, v]) => v).join(';'))
+        return bad === undefined ? next(e) : deny(`${bad} through dbt-mcp execute_sql is blocked.`)
+      }
+      const call = dbtMcpCall(mcp.name, args, server.env)
+      if (call === undefined) return next(e)
+      if ('deny' in call) return { deny: `${$.plugin.name}: ${call.deny}` }
+      calls = [call]
+    }
+
     // SQL sent straight to Redshift (aws redshift-data, psql): prod by the database it names.
-    for (const call of sqlCalls(cmd)) {
+    for (const call of cmd === undefined ? [] : sqlCalls(cmd)) {
       // A SQL file that cannot be read throws, and the .catch below blocks the call.
       let sql = call.sql
       for (const file of call.files) sql += ';' + (await $.fs.read(file))
@@ -1087,7 +1143,6 @@ export const register: Register = (on, options) => {
     // dbt: prod is the database dbt itself resolves for the target (or a target named prodDbtTarget).
     // Asked only for calls that could write: dbt takes seconds to start.
     // A session-wide DBT_FULL_REFRESH is not read: it changes only writes, which are checked anyway.
-    const calls = dbtCalls(cmd)
     let resolved: Env[] = []
     for (const dbt of calls) {
       // On any target: a huge result is slow on Redshift and here, and the pane keeps MAX_ROWS anyway.
@@ -1137,7 +1192,13 @@ export const register: Register = (on, options) => {
     if (isTimed && ran.deny === undefined && seconds >= toastSeconds) {
       $.ui.toast(`${ran.isError ? '✗' : '✻'} dbt ${primary.verb} ${ran.isError ? 'FAILED' : 'passed'} in ${seconds}s`)
     }
-    if (ran.deny === undefined) {
+    if (ran.deny === undefined && cmd === undefined) {
+      // dbt-mcp answers with dbt's output in text blocks: the whole of it, where `text` may be cut short.
+      const out: unknown = ran.result
+      const blocks: unknown = Array.isArray(out) ? out : typeof out === 'object' && out !== null ? (out as { content?: unknown }).content : undefined
+      const said = Array.isArray(blocks) ? blocks.map(b => (typeof b === 'object' && b !== null && typeof (b as { text?: unknown }).text === 'string' ? (b as { text: string }).text : '')).join('\n') : ''
+      await capture($, '', primary, said || (typeof out === 'string' ? out : (ran.text ?? '')), startedAt)
+    } else if (ran.deny === undefined && cmd !== undefined) {
       const out: unknown = ran.result
       // A field's text; Claude Code sends some fields as present but undefined.
       const field = (k: string) => {
@@ -1151,6 +1212,6 @@ export const register: Register = (on, options) => {
     }
     return ran
   }).catch(($, e, next) =>
-    next.called ? next(e) : isShell(e.tool) ? { deny: 'redshift-dbt-kit: its guard failed, so the command is blocked.' } : next(e),
+    next.called ? next(e) : isShell(e.tool) || isMcpGuarded(e.tool) ? { deny: 'redshift-dbt-kit: its guard failed, so the command is blocked.' } : next(e),
   )
 }
